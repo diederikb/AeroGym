@@ -3,6 +3,23 @@ from gym import spaces
 import math
 import numpy as np
 
+def compute_wagner_lift(alpha, Omega, Omega_dot, h_dot, h_ddot, wake_circulation, t, delta_t, rho=1, U=1, c=1, a=0):
+    t_release_earliest_wake_element = (t / delta_t - len(wake_circulation) + 1) * delta_t
+    fy_wake = wake_circulation[-1] * wagner(t_release_earliest_wake_element)
+    for i in range(1,len(wake_circulation)):
+        fy_wake += (wake_circulation[-i - 1] - wake_circulation[-i]) * wagner(t_release_earliest_wake_element - i * delta_t)
+    fy_wake *= -rho * U
+    fy = rho * c ** 2 * math.pi / 4 * (-h_ddot + a * Omega_dot - U * Omega) + fy_wake
+    return fy
+
+def compute_Gamma_b(alpha, Omega, h_dot, U=1, c=1, a=0):
+    return math.pi * c * (h_dot + U * alpha + (c / 4 - a) * Omega) 
+
+def compute_Gamma_b_dot(Omega, Omega_dot, h_ddot, U=1, c=1, a=0):
+    return math.pi * c * (h_ddot + U * Omega + (c / 4 - a) * Omega_dot) 
+
+def wagner(t):
+    return 1 - 0.165 * math.exp(-0.091 * t) - 0.335 * math.exp(-0.6 * t)
 
 class WagnerEnv(gym.Env):
     metadata = {"render_modes": ["ansi"], "render_fps": 4}
@@ -80,10 +97,10 @@ class WagnerEnv(gym.Env):
             self._h_dot = self.np_random.uniform(-1.0, 1.0)
             self._h_ddot = self.np_random.uniform(-1.0, 1.0)
             self._wake_circulation = self.np_random.uniform(-1.0, 1.0, self.t_wake_max / self.delta_t)
-            self._wake_circulation[0] = self._wake_circulation[1] + self.delta_t * self._compute_Gamma_b_dot(self._Omega, self._Omega_dot, self._h_ddot)
+            self._wake_circulation[0] = self._wake_circulation[1] + self.delta_t * compute_Gamma_b_dot(self._Omega, self._Omega_dot, self._h_ddot)
         
         # Compute the lift
-        self.fy = self._compute_wagner_lift(self._alpha, self._Omega, self._Omega_dot, self._h_dot, self._h_ddot, self._wake_circulation, self.t, self.delta_t)
+        self.fy = compute_wagner_lift(self._alpha, self._Omega, self._Omega_dot, self._h_dot, self._h_ddot, self._wake_circulation, self.t, self.delta_t)
 
         observation = self._get_obs()
         info = self._get_info()
@@ -108,10 +125,10 @@ class WagnerEnv(gym.Env):
 
         # Update wake
         self._wake_circulation = np.roll(self._wake_circulation, 1)
-        self._wake_circulation[0] = self._wake_circulation[1] + self.delta_t * self._compute_Gamma_b_dot(self._Omega, self._Omega_dot, self._h_ddot)
+        self._wake_circulation[0] = self._wake_circulation[1] + self.delta_t * compute_Gamma_b_dot(self._Omega, self._Omega_dot, self._h_ddot)
 
         # Compute the lift and reward
-        self.fy = self._compute_wagner_lift(self._alpha, self._Omega, self._Omega_dot, self._h_dot, self._h_ddot, self._wake_circulation, self.delta_t, self.t)
+        self.fy = compute_wagner_lift(self._alpha, self._Omega, self._Omega_dot, self._h_dot, self._h_ddot, self._wake_circulation, self.delta_t, self.t)
         reward = -abs(self.fy)
         
         # Update the time and time step
@@ -130,28 +147,13 @@ class WagnerEnv(gym.Env):
         return observation, reward, terminated, False, info
 
     def render(self):
-        if self.render_mode == "rgb_array":
+        if self.render_mode == "ansi":
+            return self._render_text()
+        else:
             return self._render_frame()
 
-    #def _render_frame(self):
-    #    return
-
-    def _compute_wagner_lift(alpha, Omega, Omega_dot, h_dot, h_ddot, wake_circulation, t, delta_t, rho=1, U=1, c=1, a=0):
-        t_release_earliest_wake_element = (t / delta_t - len(wake_circulation) + 1) * delta_t
-        fy_wake = wake_circulation[-1] * wagner(t_release_earliest_wake_element)
-        for i in range(1,len(wake_circulation)):
-            fy_wake += (wake_circulation[-i - 1] - wake_circulation[-i]) * wagner(t_release_earliest_wake_element - i * delta_t)
-        fy_wake *= -rho * U
-        fy = rho * c ** 2 * math.pi / 4 * (-h_ddot + a * Omega_dot - U * Omega) + fy_wake
-        return fy
-
-    def _compute_Gamma_b(alpha, Omega, h_dot, U=1, c=1, a=0):
-        return math.pi * c * (h_dot + U * alpha + (c / 4 - a) * Omega) 
-
-    def _compute_Gamma_b_dot(Omega, Omega_dot, h_ddot, U=1, c=1, a=0):
-        return math.pi * c * (h_ddot + U * Omega + (c / 4 - a) * Omega_dot) 
-
-    def _wagner(t):
-        return 1 - 0.165 * math.exp(-0.091 * t) - 0.335 * math.exp(-0.6 * t)
-
-
+    def _render_text(self):
+        outfile = StringIO()
+        outfile.write("test\n")
+        with closing(outfile):
+            return outfile.getvalue()
