@@ -6,10 +6,10 @@ import numpy as np
 #TODO: change observation space to one big np.array and combine all states into self.state to avoid having to cast everything to float32
 
 def compute_wagner_lift(h_dot, h_ddot, alpha, Omega, Omega_dot, wake_circulation, t, delta_t, rho=1, U=1, c=1, a=0):
-    t_release_earliest_wake_element = (t / delta_t - len(wake_circulation) + 1) * delta_t
+    t_after_release_earliest_wake_element = len(wake_circulation) * delta_t
     fy_wake = wake_circulation[-1] * wagner(t_release_earliest_wake_element)
     for i in range(1,len(wake_circulation)):
-        fy_wake += (wake_circulation[-i - 1] - wake_circulation[-i]) * wagner(t_release_earliest_wake_element - i * delta_t)
+        fy_wake += (wake_circulation[-i - 1] - wake_circulation[-i]) * wagner(t_after_release_earliest_wake_element - i * delta_t)
     fy_wake *= rho * U
     fy = rho * c ** 2 * math.pi / 4 * (-h_ddot + a * Omega_dot - U * Omega) + fy_wake
     return fy
@@ -37,9 +37,9 @@ class WagnerEnv(gym.Env):
     |   5   | local circulation of the wake                                               | -Inf  | Inf  | m/s     |
     |   6   | local circulation of the wake minus the part released at t                  | -Inf  | Inf  | m/s     |
     |   7   | local circulation of the wake minus the parts released at t and t - delta_t | -Inf  | Inf  | m/s     |
-    |   .   |                                     .                                       |   .   |   .  |    .    | 
-    |   .   |                                     .                                       |   .   |   .  |    .    | 
-    |   .   |                                     .                                       |   .   |   .  |    .    | 
+    |   .   |                                     .                                       |   .   |  .   |  .      | 
+    |   .   |                                     .                                       |   .   |  .   |  .      | 
+    |   .   |                                     .                                       |   .   |  .   |  .      | 
     |  -1   | local circulation of the wake part released at t - t_wake_max               | -Inf  | Inf  | m/s     |
 
     """
@@ -54,7 +54,7 @@ class WagnerEnv(gym.Env):
         self.zero_ics = zero_ics
         if h_ddot_prescribed is not None:
             assert len(h_ddot_prescribed) > t_max / delta_t, "The prescribed vertical acceleration has not enough entries for the whole simulation"
-        self.h_ddot_prescribed = h_ddot_prescribed
+        self.state[1]_prescribed = h_ddot_prescribed
 
         # Observations are the wing's AOA, the angular/vertical velocity and acceleration, and the circulation of the elements in the wake. If we wouldn't include the state of the wake, it wouldn't be an MDP.
         low = np.concatenate(
@@ -156,17 +156,26 @@ class WagnerEnv(gym.Env):
         return observation, info
 
     def step(self, action):
-        # Update AOA
-        self.state[4] = action
-        self.state[3] += self.state[4] * self.delta_t
-        self.state[2] += self.state[3] * self.delta_t
-        
+        # Update the time and time step
+        self.t += delta_t
+        self.step += 1
+
         # If there is no prescribed vertical acceleration, sample the vertical acceleration from a normal distribution and update the vertical velocity
         if h_ddot_prescribed is None:
-            self.h_ddot = self.np_random.normal(self.h_ddot_mean, self.h_ddot_std)
+            h_ddot_np1 = self.np_random.normal(self.state[1]_mean, self.state[1]_std)
         else:
-            self.h_ddot = h_ddot_prescribed[self.step]
-        self.state[0] += self.h_ddot * self.delta_t
+            h_ddot_np1 = h_ddot_prescribed[self.step]
+        # Update vertical velocity and acceleration
+        self.state[0] += 0.5 * (self.state[1] + h_ddot_np1) * self.delta_t
+        self.state[1] = h_ddot_np1
+
+        # Update AOA
+        Omega_dot_np1 = action
+        Omega_np1 = self.state[3] + 0.5 * (self.state[4] + Omega_dot_np1) * self.delta_t
+        alpha_np1 = self.state[2] + 0.5 * (self.state[3] + Omega_np1) * self.delta_t
+        self.state[2] = alpha_np1
+        self.state[3] = Omega_np1
+        self.state[4] = Omega_dot_np1
 
         # Update wake
         self.state[6:-1] = self.state[5:-2]
@@ -175,10 +184,6 @@ class WagnerEnv(gym.Env):
         # Compute the lift and reward
         self.fy = compute_wagner_lift(self.state[0], self.state[1], self.state[2], self.state[3], self.state[4], self.state[5:-1], self.t, self.delta_t)
         reward = -abs(self.fy)
-        
-        # Update the time and time step
-        self.t += delta_t
-        self.step += 1
 
         # Check if the episode is done
         terminated = self.t >= self.tmax
