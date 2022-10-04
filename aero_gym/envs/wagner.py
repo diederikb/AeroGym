@@ -3,6 +3,8 @@ from gym import spaces
 import math
 import numpy as np
 
+#TODO: change observation space to one big np.array and combine all states into self.state to avoid having to cast everything to float32
+
 def compute_wagner_lift(alpha, Omega, Omega_dot, h_dot, h_ddot, wake_circulation, t, delta_t, rho=1, U=1, c=1, a=0):
     t_release_earliest_wake_element = (t / delta_t - len(wake_circulation) + 1) * delta_t
     fy_wake = wake_circulation[-1] * wagner(t_release_earliest_wake_element)
@@ -37,12 +39,12 @@ class WagnerEnv(gym.Env):
         # Observations are the wing's AOA, the angular/vertical velocity and acceleration, and the circulation of the elements in the wake. If we wouldn't include the state of the wake, it wouldn't be an MDP.
         self.observation_space = spaces.Dict(
             {
-                "alpha": spaces.Box(5*math.pi/180, 5*math.pi/180, dtype=np.float32),
-                "Omega": spaces.Box(5*math.pi/180, 5*math.pi/180, dtype=np.float32),
-                "Omega_dot": spaces.Box(5*math.pi/180, 5*math.pi/180, dtype=np.float32),
-                "h_dot": spaces.Box(-1, 1, dtype=float32),
-                "h_ddot": spaces.Box(-1, 1, dtype=float32),
-                "wake_circulation": spaces.Box(low=-1, high=1, shape=(t_wake_max / delta_t,), dtype=np.float32),
+                "alpha": spaces.Box(-5*math.pi/180, 5*math.pi/180, dtype=np.float32),
+                "Omega": spaces.Box(-5*math.pi/180, 5*math.pi/180, dtype=np.float32),
+                "Omega_dot": spaces.Box(-5*math.pi/180, 5*math.pi/180, dtype=np.float32),
+                "h_dot": spaces.Box(-1, 1, dtype=np.float32),
+                "h_ddot": spaces.Box(-1, 1, dtype=np.float32),
+                "wake_circulation": spaces.Box(low=-1, high=1, shape=(int(t_wake_max / delta_t),), dtype=np.float32),
             }
         )
 
@@ -63,10 +65,10 @@ class WagnerEnv(gym.Env):
         self.clock = None
 
     def _get_obs(self):
-        return {"alpha":self._alpha, "Omega": self._Omega, "Omega_dot": self._Omega_dot, "h_dot": self._h_dot, "h_ddot": self._h_ddot, "wake_circulation": self._wake_circulation}
+        return {"alpha": self._alpha, "Omega": self._Omega, "Omega_dot": self._Omega_dot, "h_dot": self._h_dot, "h_ddot": self._h_ddot, "wake_circulation": self._wake_circulation}
 
     def _get_info(self):
-        return {self.fy}
+        return {"lift": self.fy}
 
     def reset(self, seed=None, options=None):
         # We need the following line to seed self.np_random
@@ -77,26 +79,26 @@ class WagnerEnv(gym.Env):
         self.step = 0
        
         if self.zero_ics:
-            self._alpha = 0.0
-            self._Omega = 0.0
-            self._Omega_dot = 0.0
-            self._h_dot = 0.0
-            self._h_ddot = 0.0 
-            self._wake_circulation = np.zeros(self.t_wake_max / self.delta_t)
+            self._alpha = np.zeros(1, dtype=np.float32)
+            self._Omega = np.zeros(1, dtype=np.float32)
+            self._Omega_dot = np.zeros(1, dtype=np.float32)
+            self._h_dot = np.zeros(1, dtype=np.float32)
+            self._h_ddot = np.zeros(1, dtype=np.float32) 
+            self._wake_circulation = np.zeros(int(self.t_wake_max / self.delta_t), dtype=np.float32)
         elif self.steady_ics:
-            self._alpha = self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180)
-            self._Omega = 0.0
-            self._Omega_dot = 0.0
-            self._h_dot = self.np_random.uniform(-1.0, 1.0)
-            self._h_ddot = 0.0 
-            self._wake_circulation = np.zeros(self.t_wake_max / self.delta_t)
+            self._alpha = self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180).astype(np.float32)
+            self._Omega = np.float32(0.0)
+            self._Omega_dot = np.float32(0.0)
+            self._h_dot = self.np_random.uniform(-1.0, 1.0).astype(np.float32)
+            self._h_ddot = np.float32(0.0) 
+            self._wake_circulation = np.zeros(self.t_wake_max / self.delta_t, dtype=np.float32)
         else:
-            self._alpha = self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180)
-            self._Omega = self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180)
-            self._Omega_dot = self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180)
-            self._h_dot = self.np_random.uniform(-1.0, 1.0)
-            self._h_ddot = self.np_random.uniform(-1.0, 1.0)
-            self._wake_circulation = self.np_random.uniform(-1.0, 1.0, self.t_wake_max / self.delta_t)
+            self._alpha = self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180).astype(np.float32)
+            self._Omega = self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180).astype(np.float32)
+            self._Omega_dot = self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180).astype(np.float32)
+            self._h_dot = self.np_random.uniform(-1.0, 1.0).astype(np.float32)
+            self._h_ddot = self.np_random.uniform(-1.0, 1.0).astype(np.float32)
+            self._wake_circulation = self.np_random.uniform(-1.0, 1.0, self.t_wake_max / self.delta_t).astype(np.float32)
             self._wake_circulation[0] = self._wake_circulation[1] + self.delta_t * compute_Gamma_b_dot(self._Omega, self._Omega_dot, self._h_ddot)
         
         # Compute the lift
