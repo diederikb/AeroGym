@@ -7,7 +7,7 @@ import numpy as np
 
 def compute_wagner_lift(h_dot, h_ddot, alpha, Omega, Omega_dot, wake_circulation, t, delta_t, rho=1, U=1, c=1, a=0):
     t_after_release_earliest_wake_element = len(wake_circulation) * delta_t
-    fy_wake = wake_circulation[-1] * wagner(t_release_earliest_wake_element)
+    fy_wake = wake_circulation[-1] * wagner(t_after_release_earliest_wake_element)
     for i in range(1,len(wake_circulation)):
         fy_wake += (wake_circulation[-i - 1] - wake_circulation[-i]) * wagner(t_after_release_earliest_wake_element - i * delta_t)
     fy_wake *= rho * U
@@ -54,31 +54,37 @@ class WagnerEnv(gym.Env):
         self.zero_ics = zero_ics
         if h_ddot_prescribed is not None:
             assert len(h_ddot_prescribed) > t_max / delta_t, "The prescribed vertical acceleration has not enough entries for the whole simulation"
-        self.state[1]_prescribed = h_ddot_prescribed
+        self.h_ddot_prescribed = h_ddot_prescribed
 
         # Observations are the wing's AOA, the angular/vertical velocity and acceleration, and the circulation of the elements in the wake. If we wouldn't include the state of the wake, it wouldn't be an MDP.
         low = np.concatenate(
-            np.array(
-                [
-                    -np.inf,
-                    -np.inf,
-                    -math.pi/2,
-                    -np.inf,
-                    -np.inf,
-                ],
-            np.full((self.N_wake,), -np.inf)
+            (
+                np.array(
+                    [
+                        -np.inf,
+                        -np.inf,
+                        -math.pi/2,
+                        -np.inf,
+                        -np.inf,
+                    ]
+                ),
+                np.full((self.N_wake,), -np.inf)
+            )
         ).astype(np.float32)
 
         high = np.concatenate(
-            np.array(
-                [
-                    np.inf,
-                    np.inf,
-                    math.pi/2,
-                    np.inf,
-                    np.inf,
-                ],
-            np.full((self.N_wake,), np.inf)
+            (
+                np.array(
+                    [
+                        np.inf,
+                        np.inf,
+                        math.pi/2,
+                        np.inf,
+                        np.inf,
+                    ]
+                ),
+                np.full((self.N_wake,), np.inf)
+            )
         ).astype(np.float32)
 
         self.observation_space = spaces.Box(low, high, (5 + self.N_wake,), dtype=np.float32)
@@ -162,7 +168,7 @@ class WagnerEnv(gym.Env):
 
         # If there is no prescribed vertical acceleration, sample the vertical acceleration from a normal distribution and update the vertical velocity
         if h_ddot_prescribed is None:
-            h_ddot_np1 = self.np_random.normal(self.state[1]_mean, self.state[1]_std)
+            h_ddot_np1 = self.np_random.normal(self.h_ddot_mean, self.h_ddot_std)
         else:
             h_ddot_np1 = h_ddot_prescribed[self.step]
         # Update vertical velocity and acceleration
