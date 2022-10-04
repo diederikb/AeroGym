@@ -27,45 +27,46 @@ class WagnerEnv(gym.Env):
     """
     ### Observation Space
     The observation is an `ndarray` with shape `(5 + t_wake_max / delta_t,)` where the elements correspond to the following:
-    | Index | Observation                                                                 | Min   | Max  | Unit    |
-    |-------|-----------------------------------------------------------------------------|-------|------|---------|
-    |   0   | vertical velocity of the wing                                               | -Inf  | Inf  | m/s     |
-    |   1   | vertical acceleration of the wing                                           | -Inf  | Inf  | m/s^2   |
-    |   2   | angle of the wing (pos counterclockwise)                                    | -pi/2 | pi/2 | rad     |
-    |   3   | angular velocity of the wing                                                | -Inf  | Inf  | rad/s   |
-    |   4   | angular acceleration of the wing                                            | -Inf  | Inf  | rad/s^2 |
-    |   5   | local circulation of the wake                                               | -Inf  | Inf  | m/s     |
-    |   6   | local circulation of the wake minus the part released at t                  | -Inf  | Inf  | m/s     |
-    |   7   | local circulation of the wake minus the parts released at t and t - delta_t | -Inf  | Inf  | m/s     |
-    |   .   |                                     .                                       |   .   |  .   |  .      | 
-    |   .   |                                     .                                       |   .   |  .   |  .      | 
-    |   .   |                                     .                                       |   .   |  .   |  .      | 
-    |  -1   | local circulation of the wake part released at t - t_wake_max               | -Inf  | Inf  | m/s     |
+    | Index | Observation                                                                 | Min    | Max    | Unit    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | vertical velocity of the wing                                               | -0.1*U | 0.1*U  | m/s     |
+    |   1   | vertical acceleration of the wing                                           | -Inf   | Inf    | m/s^2   |
+    |   2   | angle of the wing (pos counterclockwise)                                    | -pi/36 | pi/36  | rad     |
+    |   3   | angular velocity of the wing                                                | -Inf   | Inf    | rad/s   |
+    |   4   | angular acceleration of the wing                                            | -Inf   | Inf    | rad/s^2 |
+    |   5   | local circulation of the wake                                               | -Inf   | Inf    | m/s     |
+    |   6   | local circulation of the wake minus the part released at t                  | -Inf   | Inf    | m/s     |
+    |   7   | local circulation of the wake minus the parts released at t and t - delta_t | -Inf   | Inf    | m/s     |
+    |   .   |                                     .                                       |   .    |  .     |  .      | 
+    |   .   |                                     .                                       |   .    |  .     |  .      | 
+    |   .   |                                     .                                       |   .    |  .     |  .      | 
+    |  -1   | local circulation of the wake part released at t - t_wake_max               | -Inf   | Inf    | m/s     |
 
     """
     metadata = {"render_modes": ["ansi"], "render_fps": 4}
 
-    def __init__(self, render_mode=None, delta_t=0.1, t_max=100.0, t_wake_max=20.0, h_ddot_mean=0.0, h_ddot_std=1.0, h_ddot_prescribed=None, steady_ics=False, random_ics=False):
+    def __init__(self, render_mode=None, delta_t=0.1, t_max=100.0, t_wake_max=20.0, h_ddot_mean=0.0, h_ddot_std=1.0, U=1.0, h_ddot_prescribed=None, steady_ics=False, random_ics=False):
         self.delta_t = delta_t  # The time step size of the simulation
         self.t_max = t_max
         self.t_wake_max = t_wake_max
         self.N_wake = int(self.t_wake_max / self.delta_t)
-        self.steady_ics = steady_ics
-        self.random_ics = random_ics
         if h_ddot_prescribed is not None:
             assert len(h_ddot_prescribed) > t_max / delta_t, "The prescribed vertical acceleration has not enough entries for the whole simulation"
         self.h_ddot_prescribed = h_ddot_prescribed
         self.h_ddot_mean = h_ddot_mean
         self.h_ddot_std = h_ddot_std
+        self.U = U
+        self.steady_ics = steady_ics
+        self.random_ics = random_ics
 
         # Observations are the wing's AOA, the angular/vertical velocity and acceleration, and the circulation of the elements in the wake. If we wouldn't include the state of the wake, it wouldn't be an MDP.
         low = np.concatenate(
             (
                 np.array(
                     [
+                        -0.1 * U,
                         -np.inf,
-                        -np.inf,
-                        -math.pi/2,
+                        -math.pi/36,
                         -np.inf,
                         -np.inf,
                     ]
@@ -78,9 +79,9 @@ class WagnerEnv(gym.Env):
             (
                 np.array(
                     [
+                        0.1 * U,
                         np.inf,
-                        np.inf,
-                        math.pi/2,
+                        math.pi/36,
                         np.inf,
                         np.inf,
                     ]
@@ -137,7 +138,7 @@ class WagnerEnv(gym.Env):
                 )
             )
             # Set the last released wake element such that it is compatible with the latest change in 
-            self.state[5] = self.state[6] - self.delta_t * compute_Gamma_b_dot(self.state[1], self.state[3], self.state[4])
+            self.state[5] = self.state[6] - self.delta_t * compute_Gamma_b_dot(self.state[1], self.state[3], self.state[4], U=self.U)
         # This steady_ics option is not ideal because the implemented Wagner function will not reach the true steady state value
         elif self.steady_ics:
             self.state = np.concatenate(
@@ -154,12 +155,12 @@ class WagnerEnv(gym.Env):
                     np.zeros(self.N_wake, dtype=np.float32)
                 )
             )
-            self.state[5:] = np.full(self.N_wake, -compute_Gamma_b(self.state[0], self.state[2], self.state[3]), dtype=np.float32)
+            self.state[5:] = np.full(self.N_wake, -compute_Gamma_b(self.state[0], self.state[2], self.state[3], U=self.U), dtype=np.float32)
         else:
             self.state = np.zeros(5 + self.N_wake, dtype=np.float32)
         
         # Compute the lift
-        self.fy = compute_wagner_lift(self.state[0], self.state[1], self.state[2], self.state[3], self.state[4], self.state[5:-1], self.t, self.delta_t)
+        self.fy = compute_wagner_lift(self.state[0], self.state[1], self.state[2], self.state[3], self.state[4], self.state[5:-1], self.t, self.delta_t, U=self.U)
 
         observation = self._get_obs()
         info = self._get_info()
@@ -193,10 +194,10 @@ class WagnerEnv(gym.Env):
 
         # Update wake
         self.state[6:] = self.state[5:-1]
-        self.state[5] = self.state[6] - self.delta_t * compute_Gamma_b_dot(self.state[1], self.state[3], self.state[4])
+        self.state[5] = self.state[6] - self.delta_t * compute_Gamma_b_dot(self.state[1], self.state[3], self.state[4], U=self.U)
 
         # Compute the lift and reward
-        self.fy = compute_wagner_lift(self.state[0], self.state[1], self.state[2], self.state[3], self.state[4], self.state[5:-1], self.t, self.delta_t)
+        self.fy = compute_wagner_lift(self.state[0], self.state[1], self.state[2], self.state[3], self.state[4], self.state[5:-1], self.t, self.delta_t, U=self.U)
         reward = -abs(self.fy)
 
         # Check if the episode is done
