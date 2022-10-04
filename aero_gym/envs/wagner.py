@@ -45,16 +45,18 @@ class WagnerEnv(gym.Env):
     """
     metadata = {"render_modes": ["ansi"], "render_fps": 4}
 
-    def __init__(self, render_mode=None, delta_t=0.1, t_max=100.0, t_wake_max=20.0 ,h_ddot_mean=0.0, h_ddot_std=1.0, h_ddot_prescribed=None, steady_ics=True, zero_ics=True):
+    def __init__(self, render_mode=None, delta_t=0.1, t_max=100.0, t_wake_max=20.0, h_ddot_mean=0.0, h_ddot_std=1.0, h_ddot_prescribed=None, steady_ics=False, random_ics=False):
         self.delta_t = delta_t  # The time step size of the simulation
         self.t_max = t_max
         self.t_wake_max = t_wake_max
         self.N_wake = int(self.t_wake_max / self.delta_t)
         self.steady_ics = steady_ics
-        self.zero_ics = zero_ics
+        self.random_ics = random_ics
         if h_ddot_prescribed is not None:
             assert len(h_ddot_prescribed) > t_max / delta_t, "The prescribed vertical acceleration has not enough entries for the whole simulation"
         self.h_ddot_prescribed = h_ddot_prescribed
+        self.h_ddot_mean = h_ddot_mean
+        self.h_ddot_std = h_ddot_std
 
         # Observations are the wing's AOA, the angular/vertical velocity and acceleration, and the circulation of the elements in the wake. If we wouldn't include the state of the wake, it wouldn't be an MDP.
         low = np.concatenate(
@@ -90,7 +92,7 @@ class WagnerEnv(gym.Env):
         self.observation_space = spaces.Box(low, high, (5 + self.N_wake,), dtype=np.float32)
 
         # We have 1 action: the angular acceleration
-        self.action_space = spaces.Box(low=-1, high=1, dtype=np.float32)
+        self.action_space = spaces.Box(-1, 1, (1,), dtype=np.float32)
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -117,38 +119,44 @@ class WagnerEnv(gym.Env):
 
         # Reset the time and time step
         self.t = 0.0
-        self.step = 0
+        self.time_step = 0
        
-        if self.zero_ics:
-            self.state = np.zeros(5 + self.N_wake, dtype=np.float32)
-        elif self.steady_ics:
+        if self.random_ics:
             self.state = np.concatenate(
-                np.array(
-                    [
-                        self.np_random.uniform(-1.0, 1.0),
-                        0.0,
-                        self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180),
-                        0.0,
-                        0.0,
-                    ]
-                ).astype(np.float32),
-                np.zeros(self.N_wake, dtype=np.float32)
-            )
-        else:
-            self.state = np.concatenate(
-                np.array(
-                    [
-                        self.np_random.uniform(-1.0, 1.0),
-                        self.np_random.uniform(-1.0, 1.0),
-                        self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180),
-                        self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180),
-                        self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180),
-                    ]
-                ).astype(np.float32),
-                self.np_random.uniform(-1.0, 1.0, self.N_wake, dtype=np.float32).astype(np.float32)
+                (
+                    np.array(
+                        [
+                            self.np_random.uniform(-1.0, 1.0),
+                            self.np_random.uniform(-1.0, 1.0),
+                            self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180),
+                            self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180),
+                            self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180),
+                        ]
+                    ).astype(np.float32),
+                    self.np_random.uniform(-1.0, 1.0, self.N_wake).astype(np.float32)
+                )
             )
             # Set the last released wake element such that it is compatible with the latest change in 
             self.state[5] = self.state[6] - self.delta_t * compute_Gamma_b_dot(self.state[1], self.state[3], self.state[4])
+        # This steady_ics option is not ideal because the implemented Wagner function will not reach the true steady state value
+        elif self.steady_ics:
+            self.state = np.concatenate(
+                (
+                    np.array(
+                        [
+                            self.np_random.uniform(-1.0, 1.0),
+                            0.0,
+                            self.np_random.uniform(-5.0*math.pi/180, 5.0*math.pi/180),
+                            0.0,
+                            0.0,
+                        ]
+                    ).astype(np.float32),
+                    np.zeros(self.N_wake, dtype=np.float32)
+                )
+            )
+            self.state[5:] = np.full(self.N_wake, -compute_Gamma_b(self.state[0], self.state[2], self.state[3]), dtype=np.float32)
+        else:
+            self.state = np.zeros(5 + self.N_wake, dtype=np.float32)
         
         # Compute the lift
         self.fy = compute_wagner_lift(self.state[0], self.state[1], self.state[2], self.state[3], self.state[4], self.state[5:-1], self.t, self.delta_t)
@@ -163,14 +171,14 @@ class WagnerEnv(gym.Env):
 
     def step(self, action):
         # Update the time and time step
-        self.t += delta_t
-        self.step += 1
+        self.t += self.delta_t
+        self.time_step += 1
 
         # If there is no prescribed vertical acceleration, sample the vertical acceleration from a normal distribution and update the vertical velocity
-        if h_ddot_prescribed is None:
+        if self.h_ddot_prescribed is None:
             h_ddot_np1 = self.np_random.normal(self.h_ddot_mean, self.h_ddot_std)
         else:
-            h_ddot_np1 = h_ddot_prescribed[self.step]
+            h_ddot_np1 = self.h_ddot_prescribed[self.time_step]
         # Update vertical velocity and acceleration
         self.state[0] += 0.5 * (self.state[1] + h_ddot_np1) * self.delta_t
         self.state[1] = h_ddot_np1
@@ -184,7 +192,7 @@ class WagnerEnv(gym.Env):
         self.state[4] = Omega_dot_np1
 
         # Update wake
-        self.state[6:-1] = self.state[5:-2]
+        self.state[6:] = self.state[5:-1]
         self.state[5] = self.state[6] - self.delta_t * compute_Gamma_b_dot(self.state[1], self.state[3], self.state[4])
 
         # Compute the lift and reward
@@ -192,7 +200,7 @@ class WagnerEnv(gym.Env):
         reward = -abs(self.fy)
 
         # Check if the episode is done
-        terminated = self.t >= self.tmax
+        terminated = self.t >= self.t_max
 
         observation = self._get_obs()
         info = self._get_info()
