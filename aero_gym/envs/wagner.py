@@ -10,21 +10,37 @@ import sys
 #TODO: truncate action if it would bring the state outside the observation space
 #TODO: check_env -> reset() check initialize state[1]
 
-def compute_wagner_lift(h_dot, h_ddot, alpha, Omega, Omega_dot, wake_circulation, t, delta_t, rho=1, U=1, c=1, a=0):
+def compute_wagner_lift(h_dot, h_ddot, theta, theta_dot, theta_ddot, wake_circulation, t, delta_t, rho=1, U=1, c=1, a=0):
     t_after_release_earliest_wake_element = len(wake_circulation) * delta_t
     fy_wake = wake_circulation[-1] * wagner(t_after_release_earliest_wake_element)
     for i in range(1,len(wake_circulation)):
         fy_wake += (wake_circulation[-i - 1] - wake_circulation[-i]) * wagner(t_after_release_earliest_wake_element - i * delta_t)
     fy_wake *= rho * U
-    fy_wake = 0
-    fy = rho * c ** 2 * math.pi / 4 * (-h_ddot + a * Omega_dot - U * Omega) + fy_wake
+    #fy_wake = 0
+    fy = rho * c ** 2 * math.pi / 4 * (-h_ddot + a * theta_ddot - U * theta_dot) + fy_wake
     return fy
 
-def compute_Gamma_b(h_dot, alpha, Omega, U=1, c=1, a=0):
-    return math.pi * c * (h_dot + U * alpha + (c / 4 - a) * Omega) 
+def compute_new_wake_element(h_dot, theta, theta_dot, wake, delta_t, U=1, c=1, a=0):
+    Gamma_b = compute_Gamma_b(h_dot, theta, theta_dot, U=U, c=c, a=a)
+    old_wake_influence = 0.0
+    for i in range(1, len(wake)):
+        x = (i + 0.5) * U * delta_t + 0.5 * c
+        old_wake_influence += U * delta_t * wake[i] * math.sqrt(x + 0.5 * c) / math.sqrt(x - 0.5 * c)
+    new_wake_element = math.sqrt(0.5 * U * delta_t) / math.sqrt(0.5 * U * delta_t + c) * (-Gamma_b - old_wake_influence)
+    return new_wake_element
 
-def compute_Gamma_b_dot(h_ddot, Omega, Omega_dot, U=1, c=1, a=0):
-    return math.pi * c * (h_ddot + U * Omega + (c / 4 - a) * Omega_dot) 
+def compute_lift(h_ddot, theta_dot, theta_ddot, wake, delta_t, rho=1, U=1, c=1, a=0):
+    fy = rho * c ** 2 * math.pi / 4 * (-h_ddot + a * theta_ddot - U * theta_dot)
+    for i in range(0, len(wake)):
+        x = (i + 0.5) * U * delta_t + 0.5 * c
+        fy += rho * U * U * delta_t * wake[i] * x / math.sqrt(x ** 2 - 0.25 * c ** 2)
+    return fy
+
+def compute_Gamma_b(h_dot, theta, theta_dot, U=1, c=1, a=0):
+    return math.pi * c * (h_dot + U * theta + (0.25 * c - a) * theta_dot) 
+
+def compute_Gamma_b_dot(h_ddot, theta_dot, theta_ddot, U=1, c=1, a=0):
+    return math.pi * c * (h_ddot + U * theta_dot + (0.25 * c - a) * theta_ddot) 
 
 def wagner(t):
     if t >= 0.0:
@@ -38,7 +54,7 @@ def random_fourier_series(t, T, N):
     #A = np.random.randint(-1, high=2, size=N)
     #s = 0.1*A[0]*np.ones(len(t))
     s = 0.0
-    s += 0.05*sum(np.sin(2*math.pi/T*n*t)*A[n]/n for n in range(1, N))
+    s += 0.01*sum(np.sin(2*math.pi/T*n*t)*A[n]/n for n in range(1, N))
     return s
 
 class WagnerEnv(gym.Env):
@@ -69,7 +85,6 @@ class WagnerEnv(gym.Env):
                  num_discrete_actions=3,
                  delta_t=0.1,
                  t_max=100.0,
-                 t_wake_max=20.0,
                  h_ddot_mean=0.0,
                  h_ddot_std=1.0,
                  h_ddot_N=100,
@@ -81,13 +96,16 @@ class WagnerEnv(gym.Env):
                  h_ddot_prescribed=None,
                  random_ics=False,
                  random_fourier_h_ddot=False,
-                 reward_type=1):
+                 reward_type=1,
+                 observe_wake=False,
+                 observe_lift=True,
+                 lift_threshold=0.01):
         self.continuous_actions = continuous_actions
         self.num_discrete_actions = num_discrete_actions
         self.delta_t = delta_t  # The time step size of the simulation
         self.t_max = t_max
-        self.t_wake_max = t_wake_max
-        self.N_wake = int(self.t_wake_max / self.delta_t)
+        self.t_wake_max = t_max # The maximum amount of time that a wake element is saved in the state vector since its release
+        self.N_wake = int(self.t_wake_max / self.delta_t) # The number of wake elements that are kept in the state vector
         if h_ddot_prescribed is not None:
             assert len(h_ddot_prescribed) >= int(t_max / delta_t) + 1, "The prescribed vertical acceleration has not enough entries for the whole simulation (including t=0)"
         self.h_ddot_prescribed = h_ddot_prescribed
@@ -102,48 +120,85 @@ class WagnerEnv(gym.Env):
         self.random_ics = random_ics
         self.random_fourier_h_ddot = random_fourier_h_ddot
         self.reward_type = reward_type
+        
+        self.hdot_threshold = np.inf
+        self.hddot_threshold = np.inf
+        #self.angle_threshold = 20 * math.pi / 180
+        #self.theta_dot_threshold = 10 * math.pi / 180
+        self.theta_ddot_threshold = 0.1 #10 * math.pi / 180
+        #self.lift_threshold = lift_threshold
+        self.angle_threshold = np.inf
+        self.theta_dot_threshold = np.inf
+        self.lift_threshold = np.inf
+
+        self.observe_lift = observe_lift
+        self.observe_wake = observe_wake
 
         # Observations are the wing's AOA, the angular/vertical velocity and acceleration, and the circulation of the elements in the wake. If we wouldn't include the state of the wake, it wouldn't be an MDP.
-        low = np.concatenate(
+        self.state_low = np.concatenate(
             (
+                np.array([-self.lift_threshold]),
                 np.array(
                     [
                         -0.1 * U, # vertical velocity
                         -0.1, # vertical acceleration
-                        -5*math.pi/180, # angle of the wing
-                        -10*math.pi/180, # angular velocity of the wing
-                        -50*math.pi/180, # angular acceleration
+                        -self.angle_threshold, # angle of the wing
+                        -self.theta_dot_threshold, # angular velocity of the wing
+                        -self.theta_ddot_threshold, # angular acceleration
                     ]
                 ),
         #        np.full((self.N_wake,), -np.inf)
             )
         ).astype(np.float32)
 
-        high = np.concatenate(
+        self.state_high = np.concatenate(
             (
+                np.array([self.lift_threshold]),
                 np.array(
                     [
                         0.1 * U, # vertical velocity
                         0.1, # vertical acceleration
-                        5*math.pi/180, # angle of the wing
-                        10*math.pi/180, # angular velocity of the wing
-                        50*math.pi/180, # angular acceleration
+                        self.angle_threshold, # angle of the wing
+                        self.theta_dot_threshold, # angular velocity of the wing
+                        self.theta_ddot_threshold, # angular acceleration
                     ]
                 ),
         #        np.full((self.N_wake,), np.inf)
             )
         ).astype(np.float32)
 
-        #self.observation_space = spaces.Box(low, high, (5 + self.N_wake,), dtype=np.float32)
-        self.observation_space = spaces.Box(low, high, (5,), dtype=np.float32)
-        #self.observation_space = spaces.Box(low[0:4], high[0:4], (4,), dtype=np.float32)
+         
+        obs_low = np.array(
+            [
+                self.state_low[1],
+                self.state_low[3]
+            ]
+        )
+        obs_high = np.array(
+            [
+                self.state_high[1],
+                self.state_high[3]
+            ]
+        )
+
+        if self.observe_wake:
+            np.append(obs_low, self.state_low[5:])
+            np.append(obs_high, self.state_high[5:])
+
+        if self.observe_lift:
+            np.append(obs_low, -self.lift_threshold)
+            np.append(obs_high, self.lift_threshold)
+
+
+        self.observation_space = spaces.Box(obs_low, obs_high, (len(obs_low),), dtype=np.float32)
+        #self.observation_space = spaces.Box(self.low, self.high, (5 + self.N_wake,), dtype=np.float32)
 
         # We have 1 action: the angular acceleration
         if self.continuous_actions:
-            self.action_space = spaces.Box(-1, 1, (1,), dtype=np.float32)
+            self.action_space = spaces.Box(-self.theta_ddot_threshold, self.theta_ddot_threshold, (1,), dtype=np.float32)
         else:
             self.action_space = spaces.Discrete(self.num_discrete_actions)
-        self.discrete_action_values = np.linspace(low[4], high[4], num=self.num_discrete_actions)
+        self.discrete_action_values = self.theta_ddot_threshold * np.linspace(-1, 1, num=self.num_discrete_actions) ** 3
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -159,8 +214,12 @@ class WagnerEnv(gym.Env):
         self.clock = None
 
     def _get_obs(self):
-        return self.state[0:5]
-        #return self.state[0:4]
+        obs = np.array([self.state[1],self.state[3]]).astype(np.float32)
+        if self.observe_wake:
+            np.append(obs, self.state[5:])
+        if self.observe_lift:
+            np.append(obs, self.fy)
+        return obs
 
     def _get_info(self):
         return {"lift": self.fy, "time": self.t, "time step": self.time_step}
@@ -203,7 +262,29 @@ class WagnerEnv(gym.Env):
 
         
         # Compute the lift
-        self.fy = compute_wagner_lift(self.state[0], self.state[1], self.state[2], self.state[3], self.state[4], self.state[5:-1], self.t, self.delta_t, rho=self.rho, U=self.U, c=self.c, a=self.a)
+        #self.fy = compute_lift(
+        #        self.state[1],
+        #        self.state[3],
+        #        self.state[4],
+        #        self.state[5:],
+        #        self.delta_t,
+        #        rho=self.rho,
+        #        U=self.U,
+        #        c=self.c,
+        #        a=self.a)
+        self.fy = compute_wagner_lift(
+                self.state[0], 
+                self.state[1],
+                self.state[2],
+                self.state[3],
+                self.state[4],
+                self.state[5:-1],
+                self.t,
+                self.delta_t,
+                rho=self.rho,
+                U=self.U,
+                c=self.c,
+                a=self.a)
 
         observation = self._get_obs()
         info = self._get_info()
@@ -229,28 +310,59 @@ class WagnerEnv(gym.Env):
 
         # Update AOA
         if self.continuous_actions:
-            Omega_dot_np1 = action[0]
+            theta_ddot_np1 = action[0]
         else:
-            Omega_dot_np1 = self.discrete_action_values[action] 
+            theta_ddot_np1 = self.discrete_action_values[action] 
 
         # Compute jerk for reward
-        jerk = (Omega_dot_np1 - self.state[4])/self.delta_t
+        jerk = (theta_ddot_np1 - self.state[4])/self.delta_t
 
-        Omega_np1 = self.state[3] + 0.5 * (self.state[4] + Omega_dot_np1) * self.delta_t
-        #Omega_np1 = action[0]
-        alpha_np1 = self.state[2] + 0.5 * (self.state[3] + Omega_np1) * self.delta_t
-        self.state[2] = alpha_np1
-        self.state[3] = Omega_np1
-        self.state[4] = Omega_dot_np1
+        theta_dot_np1 = self.state[3] + 0.5 * (self.state[4] + theta_ddot_np1) * self.delta_t
+        #theta_dot_np1 = action[0]
+        theta_np1 = self.state[2] + 0.5 * (self.state[3] + theta_dot_np1) * self.delta_t
+        self.state[2] = theta_np1
+        self.state[3] = theta_dot_np1
+        self.state[4] = theta_ddot_np1
         #self.state[4] = 0.0
 
         # Update wake
         self.state[6:] = self.state[5:-1]
+        #self.state[5] = compute_new_wake_element(
+        #        self.state[0],
+        #        self.state[2],
+        #        self.state[3],
+        #        self.state[6:],
+        #        self.delta_t,
+        #        U=self.U,
+        #        c=self.c,
+        #        a=self.a)
         self.state[5] = -compute_Gamma_b(self.state[0], self.state[2], self.state[3], U=self.U, c=self.c, a=self.a)
         self.state[5] = self.state[6] - self.delta_t * compute_Gamma_b_dot(self.state[1], self.state[3], self.state[4], U=self.U)
 
         # Compute the lift and reward
-        self.fy = compute_wagner_lift(self.state[0], self.state[1], self.state[2], self.state[3], self.state[4], self.state[5:-1], self.t, self.delta_t, rho=self.rho, U=self.U, c=self.c, a=self.a)
+        #self.fy = compute_lift(
+        #        self.state[1],
+        #        self.state[3],
+        #        self.state[4],
+        #        self.state[5:],
+        #        self.delta_t,
+        #        rho=self.rho,
+        #        U=self.U,
+        #        c=self.c,
+        #        a=self.a)
+        self.fy = compute_wagner_lift(
+                self.state[0], 
+                self.state[1],
+                self.state[2],
+                self.state[3],
+                self.state[4],
+                self.state[5:-1],
+                self.t,
+                self.delta_t,
+                rho=self.rho,
+                U=self.U,
+                c=self.c,
+                a=self.a)
         if self.reward_type == 1:
             reward = -(self.fy ** 2) # v1
         elif self.reward_type == 2:
@@ -259,14 +371,20 @@ class WagnerEnv(gym.Env):
             reward = -(self.fy ** 2 + 0.1 * self.state[4] ** 2 + 0.05 * jerk ** 2) # v3
         elif self.reward_type == 4:
             reward = -(self.fy ** 2 + 0.02 * jerk ** 2) # v4
+        elif self.reward_type == 5:
+            reward = -1 * (math.exp((self.fy / self.lift_threshold) ** 2) - 1) + 1 # v5
+        elif self.reward_type == 6:
+            reward = -10 * (self.fy ** 2) + 1 / (self.t_max / self.delta_t) # v6
 
         # Check if timelimit is reached or state went out of bounds
         #truncated = self.t > self.t_max or math.isclose(self.t, self.t_max, rel_tol=1e-9) or abs(self.fy) > 0.1
         #truncated = self.t > self.t_max or math.isclose(self.t, self.t_max, rel_tol=1e-9)
         if self.t > self.t_max or math.isclose(self.t, self.t_max, rel_tol=1e-9):
             truncated = True
-        elif abs(self.fy) > 0.1:
-            reward -= 10
+        elif self.state[2] < -self.angle_threshold or self.state[2] > self.angle_threshold:
+            truncated = True
+        elif self.fy < -self.lift_threshold or self.fy > self.lift_threshold:
+            #reward -= 10
             truncated = True
         else:
             truncated = False
