@@ -7,7 +7,6 @@ from io import StringIO
 from contextlib import closing
 import sys
 
-#TODO: use convective time in compute_wagner_lift
 #TODO: truncate action if it would bring the state outside the observation space
 #TODO: check_env -> reset() check initialize state[1]
 
@@ -179,7 +178,7 @@ class WagnerJonesEnv(gym.Env):
         return obs
 
     def _get_info(self):
-        return {"previous lift": self.fy, "time": self.t, "time step": self.time_step}
+        return {"previous lift": self.fy, "time": self.t, "time step": self.time_step, "TimeLimit.truncated"=self.truncated}
 
 
     def reset(self, seed=None, options=None):
@@ -189,6 +188,8 @@ class WagnerJonesEnv(gym.Env):
         # Reset the time and time step
         self.t = 0.0
         self.time_step = 0
+        self.truncated = False
+        self.terminated = False
 
         # Recreate a prescribed vertical acceleration if a random fourier signal is required
         if self.random_fourier_h_ddot:
@@ -250,17 +251,12 @@ class WagnerJonesEnv(gym.Env):
             self.h_ddot = self.h_ddot_prescribed[self.time_step]
 
         # Check if timelimit is reached or state went out of bounds
-        #truncated = self.t > self.t_max or math.isclose(self.t, self.t_max, rel_tol=1e-9) or abs(self.fy) > 0.1
-        #truncated = self.t > self.t_max or math.isclose(self.t, self.t_max, rel_tol=1e-9)
         if self.t > self.t_max or math.isclose(self.t, self.t_max, rel_tol=1e-9):
-            truncated = True
-        elif self.state[0] < -self.alpha_eff_threshold or self.state[0] > self.alpha_eff_threshold:
-            truncated = True
-        elif self.fy < -self.lift_threshold or self.fy > self.lift_threshold:
-            #reward -= 10
-            truncated = True
-        else:
-            truncated = False
+            self.truncated = True
+        if self.state[0] < -self.alpha_eff_threshold or self.state[0] > self.alpha_eff_threshold:
+            self.terminated = True
+        if self.fy < -self.lift_threshold or self.fy > self.lift_threshold:
+            self.terminated = True
 
         # Create observation for next state
         observation = self._get_obs()
@@ -269,7 +265,7 @@ class WagnerJonesEnv(gym.Env):
         if self.render_mode == "human":
             self.render() 
 
-        return observation, reward, False, truncated, info
+        return observation, reward, self.terminated, self.truncated, info
 
     def render(self):
         if self.render_mode == "ansi":
