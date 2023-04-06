@@ -11,7 +11,7 @@ from contextlib import closing
 class WagnerJonesEnv(gym.Env):
     """
     ### Observation Space
-    The observation is an `ndarray` with shape `(5 + t_wake_max / delta_t,)` where the elements correspond to the following:
+    The observation is an `ndarray` with shape `(4,)` where the elements correspond to the following:
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
     |   0   | effective angle of attack                                                   | -pi/18 | pi/18  | rad     |
@@ -45,7 +45,7 @@ class WagnerJonesEnv(gym.Env):
         self.delta_t = delta_t  # The time step size of the simulation
         self.t_max = t_max
         if h_ddot_prescribed is not None:
-            assert len(h_ddot_prescribed) >= int(t_max / delta_t) + 1, "The prescribed vertical acceleration has not enough entries for the whole simulation (including t=0)"
+            assert len(h_ddot_prescribed) >= int(t_max / delta_t), "The prescribed vertical acceleration has not enough entries for the whole simulation (starting at t=0)"
         self.h_ddot_prescribed = h_ddot_prescribed
         self.h_ddot_generator = h_ddot_generator
         self.rho = rho
@@ -53,7 +53,7 @@ class WagnerJonesEnv(gym.Env):
         self.c = c
         self.a = a
         self.reward_type = reward_type
-        
+
         self.alpha_eff_threshold = 10 * math.pi / 180
         self.h_ddot_threshold = np.inf
         self.alpha_dot_threshold = 10 * math.pi / 180
@@ -64,7 +64,7 @@ class WagnerJonesEnv(gym.Env):
         self.observe_h_ddot = observe_h_ddot
         self.observe_previous_lift = observe_previous_lift
 
-        # Observations are the wing's effective AOA, the vertical acceleration, the angular velocity and acceleration, and the states for Theodorsen's function approximation. 
+        # States are the wing's effective AOA, the angular velocity, and the states for Theodorsen's function approximation. 
         self.state_low = np.array(
             [
                 -self.alpha_eff_threshold, # effective AOA
@@ -82,7 +82,7 @@ class WagnerJonesEnv(gym.Env):
                 np.inf
             ]
         ).astype(np.float32)
-         
+
         obs_low = self.state_low[0:2]
         obs_high = self.state_high[0:2]
 
@@ -167,7 +167,7 @@ class WagnerJonesEnv(gym.Env):
         return obs
 
     def _get_info(self):
-        return {"previous fy": self.fy, "previous alpha_ddot": self.alpha_ddot, "current alpha_dot": self.state[1], "current alpha_eff": self.state[0], "current h_ddot": self.h_ddot, "current t": self.t, "current time_step": self.time_step, "TimeLimit.truncated": self.truncated}
+        return {"previous fy": self.fy, "previous alpha_ddot": self.alpha_ddot, "current alpha_dot": self.state[1], "current alpha_eff": self.state[0], "current h_ddot": self.h_ddot, "current t": self.t, "current time_step": self.time_step}
 
     def reset(self, seed=None, options=None):
         # We need the following line to seed self.np_random
@@ -179,18 +179,17 @@ class WagnerJonesEnv(gym.Env):
         self.truncated = False
         self.terminated = False
 
-        
         # If there is no prescribed vertical acceleration use the provided function to generate one
         if options is not None:
             if "h_ddot_prescribed" in options:
-                assert len(options["h_ddot_prescribed"]) >= int(self.t_max / self.delta_t) + 1, "The prescribed vertical acceleration has not enough entries for the whole simulation (including t=0)"
+                assert len(options["h_ddot_prescribed"]) >= int(self.t_max / self.delta_t), "The prescribed vertical acceleration has not enough entries for the whole simulation (starting at t=0)"
                 self.h_ddot_prescribed = options["h_ddot_prescribed"]
         if self.h_ddot_prescribed is not None:
             self.h_ddot_list = np.array(self.h_ddot_prescribed, dtype=np.float32)
         elif self.h_ddot_generator is not None:
             self.h_ddot_list = np.array(self.h_ddot_generator(self), dtype=np.float32)
         else:
-            self.h_ddot_list = np.zeros(int(self.t_max / self.delta_t + 1), dtype=np.float32)
+            self.h_ddot_list = np.zeros(int(self.t_max / self.delta_t), dtype=np.float32)
             print("No h_ddot provided, using zeros instead")
 
         self.h_ddot = self.h_ddot_list[self.time_step]
@@ -239,11 +238,13 @@ class WagnerJonesEnv(gym.Env):
         # Update state
         self.state = np.matmul(self.A, self.state) + np.dot(self.B, u)
 
-        self.h_ddot = self.h_ddot_list[self.time_step]
-
-        # Check if timelimit is reached or state went out of bounds
+        # Check if timelimit is reached
         if self.t > self.t_max or math.isclose(self.t, self.t_max, rel_tol=1e-9):
             self.truncated = True
+        else:
+            self.h_ddot = self.h_ddot_list[self.time_step]
+
+        # Check if state or lift goes out of bounds
         if self.state[0] < -self.alpha_eff_threshold or self.state[0] > self.alpha_eff_threshold:
             self.terminated = True
         if self.fy < -self.lift_threshold or self.fy > self.lift_threshold:
@@ -264,11 +265,11 @@ class WagnerJonesEnv(gym.Env):
 
     def _render_text(self):
         outfile = StringIO()
-        outfile.write("{:5d}{:10.5f} ".format(self.time_step, self.t))
-        outfile.write(("{:10.3e} "*3).format(
+        outfile.write("{:5d}{:10.5f}".format(self.time_step, self.t))
+        outfile.write((" {:10.3e}"*3).format(
             self.state[0],
-            self.h_ddot,
             self.state[1],
+            self.h_ddot,
         ))
         with closing(outfile):
             return outfile.getvalue()
