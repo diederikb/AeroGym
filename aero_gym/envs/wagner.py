@@ -7,30 +7,47 @@ from io import StringIO
 from contextlib import closing
 
 #TODO: use observation wrappers (with dicts) instead of observe_wake and observe_h_ddot
+#TODO: check pressure equation
+#TODO: assert xp's are between -c/2 and c/2
+#TODO: normalize observation space
 
-def compute_new_wake_element(alpha_eff, wake, delta_t, U=1, c=1):
+def compute_new_wake_element(alpha_eff, wake, delta_t, U=1.0, c=1.0):
     """
     Compute a new wake element to satisfy the Kutta condition at the trailing edge (Eldredge2019 equation 8.156).
     """
     Gamma_b = -math.pi * c * U * alpha_eff
     old_wake_influence = 0.0
+    # Assumes delta_t is constant
+    delta_x = U * delta_t
     for i in range(1, len(wake)):
         x = (i + 0.5) * U * delta_t + 0.5 * c
-        delta_x = U * delta_t
         old_wake_influence += U * wake[i] * math.sqrt(x + 0.5 * c) / math.sqrt(x - 0.5 * c) * delta_x
     new_wake_element = math.sqrt(0.5 * U * delta_t) / math.sqrt(0.5 * U * delta_t + c) * (-Gamma_b - old_wake_influence) / (U * delta_t)
-    return new_wake_element
+    return np.float32(new_wake_element)
 
-def compute_lift(h_ddot, alpha_dot, alpha_ddot, wake, delta_t, rho=1, U=1, c=1, a=0):
+def compute_lift(h_ddot, alpha_dot, alpha_ddot, wake, delta_t, rho=1.0, U=1.0, c=1.0, a=0.0):
     """
     Compute the total lift (added mass + circulatory) (Eldredge2019 equation 8.159).
     """
-    fy = rho * c ** 2 * math.pi / 4 * (-h_ddot - a * alpha_ddot + U * alpha_dot)
+    # Assumes delta_t is constant
+    delta_x = U * delta_t
+    fy = 0.25 * rho * c ** 2 * math.pi * (-h_ddot - a * alpha_ddot + U * alpha_dot)
     for i in range(0, len(wake)):
         x = (i + 0.5) * U * delta_t + 0.5 * c
-        delta_x = U * delta_t
         fy += rho * U * wake[i] * x / math.sqrt(x ** 2 - 0.25 * c ** 2) * delta_x
-    return fy
+    return np.float32(fy)
+
+def compute_wake_pressure_diff(xp, wake, delta_t, rho=1.0, U=1.0, c=1.0):
+    """
+    Compute the pressure difference between the upper and lower surface (pu-pl) at x due to the wake.
+    """
+    # Assumes delta_t is constant
+    delta_x = U * delta_t
+    p = 0.0
+    for i in range(0, len(wake)):
+        x = (i + 0.5) * U * delta_t + 0.5 * c
+        p += -rho * U * wake[i] * delta_x / math.pi * (x + xp) / (math.sqrt(x ** 2 - 0.25 * c ** 2) * math.sqrt(0.25 * c ** 2 - xp ** 2))
+    return np.float32(p)
 
 class WagnerEnv(gym.Env):
     """
@@ -41,12 +58,12 @@ class WagnerEnv(gym.Env):
     |   0   | effective angle of attack                                                   | -pi/18 | pi/18  | rad     |
     |   1   | angular velocity of the wing                                                | -pi/18 | pi/18  | rad/s   |
     |   2   | angular velocity of the wing                                                | -Inf   | Inf    | rad/s   |
-    |   3   | local circulation of the wake element released at the current time t        | -Inf   | Inf    | m/s     |
-    |   4   | local circulation of the wake element released at t - delta_t               | -Inf   | Inf    | m/s     |
+    |   3   | vortex sheet strength of the wake element released at the current time t    | -Inf   | Inf    | m/s     |
+    |   4   | vortex sheet strength of the wake element released at t - delta_t           | -Inf   | Inf    | m/s     |
     |   .   |                                     .                                       |   .    |  .     |  .      | 
     |   .   |                                     .                                       |   .    |  .     |  .      | 
     |   .   |                                     .                                       |   .    |  .     |  .      | 
-    |  -1   | local circulation of the wake element released at t - t_wake_max            | -Inf   | Inf    | m/s     |
+    |  -1   | vortex sheet strength of the wake element released at t - t_wake_max        | -Inf   | Inf    | m/s     |
 
     """
     metadata = {"render_modes": ["ansi"], "render_fps": 4}
@@ -67,6 +84,9 @@ class WagnerEnv(gym.Env):
                  observe_wake=True,
                  observe_h_ddot=False,
                  observe_previous_lift=False,
+                 observe_body_circulation=False,
+                 observe_pressure=False,
+                 pressure_sensor_positions=[],
                  lift_threshold=0.01,
                  alpha_ddot_threshold=0.1):
         self.continuous_actions = continuous_actions
@@ -74,7 +94,7 @@ class WagnerEnv(gym.Env):
         self.delta_t = delta_t  # The time step size of the simulation
         self.t_max = t_max
         if h_ddot_prescribed is not None:
-            assert len(h_ddot_prescribed) >= int(t_max / delta_t), "The prescribed vertical acceleration has not enough entries for the whole simulation (including t=0)"
+            assert len(h_ddot_prescribed) >= int(t_max / delta_t), "The prescribed vertical acceleration has not enough entries for the whole simulation (starting at t=0)"
         self.h_ddot_prescribed = h_ddot_prescribed
         self.h_ddot_generator = h_ddot_generator
         self.rho = rho
@@ -92,6 +112,9 @@ class WagnerEnv(gym.Env):
         self.observe_wake = observe_wake
         self.observe_h_ddot = observe_h_ddot
         self.observe_previous_lift = observe_previous_lift
+        self.observe_body_circulation = observe_body_circulation
+        self.observe_pressure = observe_pressure
+        self.pressure_sensor_positions = np.array(pressure_sensor_positions,dtype=np.float32)
 
         self.t_wake_max = t_max # The maximum amount of time that a wake element is saved in the state vector since its release
         self.N_wake = int(self.t_wake_max / self.delta_t) # The number of wake elements that are kept in the state vector
@@ -133,7 +156,13 @@ class WagnerEnv(gym.Env):
         if self.observe_previous_lift:
             obs_low = np.append(obs_low, -np.float32(self.lift_threshold))
             obs_high = np.append(obs_high, np.float32(self.lift_threshold))
-
+        if self.observe_body_circulation:
+            obs_low = np.append(obs_low, -np.inf)
+            obs_high = np. append(obs_high, np.inf)
+        if self.observe_pressure:
+            obs_low = np.append(obs_low, np.full_like(self.pressure_sensor_positions, -np.inf, dtype=np.float32))
+            obs_high = np.append(obs_high, np.full_like(self.pressure_sensor_positions, np.inf, dtype=np.float32))
+ 
         self.observation_space = spaces.Box(obs_low, obs_high, (len(obs_low),), dtype=np.float32)
 
         # We have 1 action: the angular acceleration
@@ -185,7 +214,13 @@ class WagnerEnv(gym.Env):
             obs = np.append(obs, self.h_ddot)
         if self.observe_previous_lift:
             obs = np.append(obs, self.fy)
-        return obs
+        if self.observe_body_circulation:
+            body_circulation = -np.sum(self.state[2:]) * self.U * self.delta_t
+            obs = np.append(obs, body_circulation)
+        if self.observe_pressure:
+            pressure_measurements = [compute_wake_pressure_diff(xp, self.state[2:], self.delta_t, rho=self.rho, U=self.U, c=self.c) for xp in self.pressure_sensor_positions]
+            obs = np.append(obs, pressure_measurements)
+        return obs.astype(np.float32)
 
     def _get_info(self):
         return {"previous fy": self.fy, "previous alpha_ddot": self.alpha_ddot, "current alpha_dot": self.state[1], "current alpha_eff": self.state[0], "current h_ddot": self.h_ddot, "current t": self.t, "current time_step": self.time_step}
@@ -215,8 +250,8 @@ class WagnerEnv(gym.Env):
 
         self.h_ddot = self.h_ddot_list[self.time_step]
         self.state = np.zeros(len(self.A) + self.N_wake, dtype=np.float32)
-        self.fy = np.float32(0.0)
-        self.alpha_ddot = np.float32(0.0)
+        self.fy = 0.0
+        self.alpha_ddot = 0.0
 
         observation = self._get_obs()
         info = self._get_info()
