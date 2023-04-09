@@ -19,7 +19,7 @@ def compute_new_wake_element(alpha_eff, gamma_wake, x_wake, delta_x_wake, U=1.0,
     old_wake_influence = np.sum((gamma_wake * np.sqrt(x_wake + 0.5 * c) / np.sqrt(x_wake - 0.5 * c) * delta_x_wake)[1:])
     # Vortex sheet strength of the element at x_wake[0]
     new_wake_element = np.sqrt(0.5 * delta_x_wake) / (np.sqrt(0.5 * delta_x_wake + c) * delta_x_wake) * (-qscirc - old_wake_influence)
-    return np.float32(new_wake_element)
+    return new_wake_element
 
 def compute_lift(h_ddot, alpha_dot, alpha_ddot, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=1.0, c=1.0, a=0.0):
     """
@@ -29,14 +29,14 @@ def compute_lift(h_ddot, alpha_dot, alpha_ddot, gamma_wake, x_wake, delta_x_wake
     fy = 0.25 * rho * c ** 2 * np.pi * (-h_ddot - a * alpha_ddot + U * alpha_dot)
     # Circulatory force
     fy += rho * U * delta_x_wake * np.sum(gamma_wake * x_wake / np.sqrt(x_wake ** 2 - 0.25 * c ** 2))
-    return np.float32(fy)
+    return fy
 
 def compute_wake_pressure_diff(xp, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=1.0, c=1.0):
     """
     Compute the pressure difference between the upper and lower surface (pu-pl) at x due to the wake.
     """
     p = -rho * U * delta_x_wake / np.pi * np.sum(gamma_wake * (x_wake + xp) / (np.sqrt(x_wake ** 2 - 0.25 * c ** 2) * np.sqrt(0.25 * c ** 2 - xp ** 2)))
-    return np.float32(p)
+    return p
 
 class WagnerEnv(gym.Env):
     """
@@ -87,9 +87,9 @@ class WagnerEnv(gym.Env):
         self.h_ddot_prescribed = h_ddot_prescribed
         self.h_ddot_generator = h_ddot_generator
         self.rho = rho
-        self.U = np.float32(U)
-        self.c = np.float32(c)
-        self.a = np.float32(a)
+        self.U = U
+        self.c = c
+        self.a = a
         self.reward_type = reward_type
 
         self.alpha_eff_threshold = 10 * np.pi / 180
@@ -103,11 +103,11 @@ class WagnerEnv(gym.Env):
         self.observe_previous_lift = observe_previous_lift
         self.observe_body_circulation = observe_body_circulation
         self.observe_pressure = observe_pressure
-        self.pressure_sensor_positions = np.array(pressure_sensor_positions, dtype=np.float32)
+        self.pressure_sensor_positions = np.array(pressure_sensor_positions)
 
         self.t_wake_max = t_max # The maximum amount of time that a wake element is saved in the state vector since its release
         self.N_wake = int(self.t_wake_max / self.delta_t) # The number of wake elements that are kept in the state vector
-        self.x_wake = np.array([(i + 0.5) * U * delta_t + 0.5 * c for i in range(self.N_wake)], dtype=np.float32)
+        self.x_wake = np.array([(i + 0.5) * U * delta_t + 0.5 * c for i in range(self.N_wake)])
         self.delta_x_wake = U * delta_t
 
         # States are the wing's effective AOA, the angular velocity, and the states to describe the lift.
@@ -121,7 +121,7 @@ class WagnerEnv(gym.Env):
                 ),
                 np.full((self.N_wake,), -np.inf)
             )
-        ).astype(np.float32)
+        )
 
         self.state_high = np.concatenate(
             (
@@ -133,7 +133,7 @@ class WagnerEnv(gym.Env):
                 ),
                 np.full((self.N_wake,), np.inf)
             )
-        ).astype(np.float32)
+        )
 
         obs_low = self.state_low[0:2]
         obs_high = self.state_high[0:2]
@@ -142,17 +142,17 @@ class WagnerEnv(gym.Env):
             obs_low = np.append(obs_low, self.state_low[2:])
             obs_high = np.append(obs_high, self.state_high[2:])
         if self.observe_h_ddot:
-            obs_low = np.append(obs_low, -np.float32(self.h_ddot_threshold))
-            obs_high = np.append(obs_high, np.float32(self.h_ddot_threshold))
+            obs_low = np.append(obs_low, -self.h_ddot_threshold)
+            obs_high = np.append(obs_high, self.h_ddot_threshold)
         if self.observe_previous_lift:
-            obs_low = np.append(obs_low, -np.float32(self.lift_threshold))
-            obs_high = np.append(obs_high, np.float32(self.lift_threshold))
+            obs_low = np.append(obs_low, -self.lift_threshold)
+            obs_high = np.append(obs_high, self.lift_threshold)
         if self.observe_body_circulation:
             obs_low = np.append(obs_low, -np.inf)
             obs_high = np. append(obs_high, np.inf)
         if self.observe_pressure:
-            obs_low = np.append(obs_low, np.full_like(self.pressure_sensor_positions, -np.inf, dtype=np.float32))
-            obs_high = np.append(obs_high, np.full_like(self.pressure_sensor_positions, np.inf, dtype=np.float32))
+            obs_low = np.append(obs_low, np.full_like(self.pressure_sensor_positions, -np.inf))
+            obs_high = np.append(obs_high, np.full_like(self.pressure_sensor_positions, np.inf))
  
         self.observation_space = spaces.Box(obs_low, obs_high, (len(obs_low),), dtype=np.float32)
 
@@ -181,8 +181,8 @@ class WagnerEnv(gym.Env):
         ])
         sys = signal.StateSpace(A, B, C, D)
         sys = sys.to_discrete(delta_t)
-        self.A = sys.A.astype(np.float32)
-        self.B = sys.B.astype(np.float32)
+        self.A = sys.A
+        self.B = sys.B
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -232,15 +232,15 @@ class WagnerEnv(gym.Env):
                 assert len(options["h_ddot_prescribed"]) >= int(self.t_max / self.delta_t), "The prescribed vertical acceleration has not enough entries for the whole simulation (starting at t=0)"
                 self.h_ddot_prescribed = options["h_ddot_prescribed"]
         if self.h_ddot_prescribed is not None:
-            self.h_ddot_list = np.array(self.h_ddot_prescribed, dtype=np.float32)
+            self.h_ddot_list = np.array(self.h_ddot_prescribed)
         elif self.h_ddot_generator is not None:
-            self.h_ddot_list = np.array(self.h_ddot_generator(self), dtype=np.float32)
+            self.h_ddot_list = np.array(self.h_ddot_generator(self))
         else:
-            self.h_ddot_list = np.zeros(int(self.t_max / self.delta_t), dtype=np.float32)
+            self.h_ddot_list = np.zeros(int(self.t_max / self.delta_t))
             print("No h_ddot provided, using zeros instead")
 
         self.h_ddot = self.h_ddot_list[self.time_step]
-        self.state = np.zeros(len(self.A) + self.N_wake, dtype=np.float32)
+        self.state = np.zeros(len(self.A) + self.N_wake)
         self.fy = 0.0
         self.alpha_ddot = 0.0
 
@@ -291,7 +291,7 @@ class WagnerEnv(gym.Env):
         self.time_step += 1
 
         # Update state
-        u = np.array([self.h_ddot, self.alpha_ddot], dtype=np.float32)
+        u = np.array([self.h_ddot, self.alpha_ddot])
         self.state[:2] = np.matmul(self.A, self.state[:2]) + np.dot(self.B, u)
 
         # Update wake states
