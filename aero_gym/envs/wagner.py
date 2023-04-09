@@ -1,6 +1,5 @@
 import gymnasium as gym
 from gymnasium import spaces
-import math
 import numpy as np
 from scipy import signal
 from io import StringIO
@@ -9,51 +8,41 @@ from contextlib import closing
 #TODO: use observation wrappers (with dicts) instead of observe_wake and observe_h_ddot
 #TODO: check pressure equation
 #TODO: assert xp's are between -c/2 and c/2
-#TODO: normalize observation space
 
-def compute_new_wake_element(alpha_eff, wake, delta_t, U=1.0, c=1.0):
+def compute_new_wake_element(alpha_eff, gamma_wake, x_wake, delta_x_wake, U=1.0, c=1.0):
     """
     Compute a new wake element to satisfy the Kutta condition at the trailing edge (Eldredge2019 equation 8.156).
     """
-    Gamma_b = -math.pi * c * U * alpha_eff
-    old_wake_influence = 0.0
-    # Assumes delta_t is constant
-    delta_x = U * delta_t
-    for i in range(1, len(wake)):
-        x = (i + 0.5) * U * delta_t + 0.5 * c
-        old_wake_influence += U * wake[i] * math.sqrt(x + 0.5 * c) / math.sqrt(x - 0.5 * c) * delta_x
-    new_wake_element = math.sqrt(0.5 * U * delta_t) / math.sqrt(0.5 * U * delta_t + c) * (-Gamma_b - old_wake_influence) / (U * delta_t)
+    # Quasi-steady circulation
+    qscirc = -np.pi * c * U * alpha_eff
+    # Integral for the wake elements at x_wake[1:]
+    old_wake_influence = np.sum((gamma_wake * np.sqrt(x_wake + 0.5 * c) / np.sqrt(x_wake - 0.5 * c) * delta_x_wake)[1:])
+    # Vortex sheet strength of the element at x_wake[0]
+    new_wake_element = np.sqrt(0.5 * delta_x_wake) / (np.sqrt(0.5 * delta_x_wake + c) * delta_x_wake) * (-qscirc - old_wake_influence)
     return np.float32(new_wake_element)
 
-def compute_lift(h_ddot, alpha_dot, alpha_ddot, wake, delta_t, rho=1.0, U=1.0, c=1.0, a=0.0):
+def compute_lift(h_ddot, alpha_dot, alpha_ddot, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=1.0, c=1.0, a=0.0):
     """
     Compute the total lift (added mass + circulatory) (Eldredge2019 equation 8.159).
     """
-    # Assumes delta_t is constant
-    delta_x = U * delta_t
-    fy = 0.25 * rho * c ** 2 * math.pi * (-h_ddot - a * alpha_ddot + U * alpha_dot)
-    for i in range(0, len(wake)):
-        x = (i + 0.5) * U * delta_t + 0.5 * c
-        fy += rho * U * wake[i] * x / math.sqrt(x ** 2 - 0.25 * c ** 2) * delta_x
+    # Added mass force
+    fy = 0.25 * rho * c ** 2 * np.pi * (-h_ddot - a * alpha_ddot + U * alpha_dot)
+    # Circulatory force
+    fy += rho * U * delta_x_wake * np.sum(gamma_wake * x_wake / np.sqrt(x_wake ** 2 - 0.25 * c ** 2))
     return np.float32(fy)
 
-def compute_wake_pressure_diff(xp, wake, delta_t, rho=1.0, U=1.0, c=1.0):
+def compute_wake_pressure_diff(xp, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=1.0, c=1.0):
     """
     Compute the pressure difference between the upper and lower surface (pu-pl) at x due to the wake.
     """
-    # Assumes delta_t is constant
-    delta_x = U * delta_t
-    p = 0.0
-    for i in range(0, len(wake)):
-        x = (i + 0.5) * U * delta_t + 0.5 * c
-        p += -rho * U * wake[i] * delta_x / math.pi * (x + xp) / (math.sqrt(x ** 2 - 0.25 * c ** 2) * math.sqrt(0.25 * c ** 2 - xp ** 2))
+    p = -rho * U * delta_x_wake / np.pi * np.sum(gamma_wake * (x_wake + xp) / (np.sqrt(x_wake ** 2 - 0.25 * c ** 2) * np.sqrt(0.25 * c ** 2 - xp ** 2)))
     return np.float32(p)
 
 class WagnerEnv(gym.Env):
     """
-    ### Observation Space
-    The observation is an `ndarray` with shape `(2 + t_wake_max / delta_t,)` where the elements correspond to the following:
-    | Index | Observation                                                                 | Min    | Max    | Unit    |
+    ### State Space
+    The state is an `ndarray` with shape `(2 + t_wake_max / delta_t,)` where the elements correspond to the following:
+    | Index | State                                                                       | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
     |   0   | effective angle of attack                                                   | -pi/18 | pi/18  | rad     |
     |   1   | angular velocity of the wing                                                | -pi/18 | pi/18  | rad/s   |
@@ -98,14 +87,14 @@ class WagnerEnv(gym.Env):
         self.h_ddot_prescribed = h_ddot_prescribed
         self.h_ddot_generator = h_ddot_generator
         self.rho = rho
-        self.U = U
-        self.c = c
-        self.a = a
+        self.U = np.float32(U)
+        self.c = np.float32(c)
+        self.a = np.float32(a)
         self.reward_type = reward_type
 
-        self.alpha_eff_threshold = 10 * math.pi / 180
+        self.alpha_eff_threshold = 10 * np.pi / 180
         self.h_ddot_threshold = np.inf
-        self.alpha_dot_threshold = 10 * math.pi / 180
+        self.alpha_dot_threshold = 10 * np.pi / 180
         self.alpha_ddot_threshold = alpha_ddot_threshold
         self.lift_threshold = lift_threshold
 
@@ -114,10 +103,12 @@ class WagnerEnv(gym.Env):
         self.observe_previous_lift = observe_previous_lift
         self.observe_body_circulation = observe_body_circulation
         self.observe_pressure = observe_pressure
-        self.pressure_sensor_positions = np.array(pressure_sensor_positions,dtype=np.float32)
+        self.pressure_sensor_positions = np.array(pressure_sensor_positions, dtype=np.float32)
 
         self.t_wake_max = t_max # The maximum amount of time that a wake element is saved in the state vector since its release
         self.N_wake = int(self.t_wake_max / self.delta_t) # The number of wake elements that are kept in the state vector
+        self.x_wake = np.array([(i + 0.5) * U * delta_t + 0.5 * c for i in range(self.N_wake)], dtype=np.float32)
+        self.delta_x_wake = U * delta_t
 
         # States are the wing's effective AOA, the angular velocity, and the states to describe the lift.
         self.state_low = np.concatenate(
@@ -215,10 +206,10 @@ class WagnerEnv(gym.Env):
         if self.observe_previous_lift:
             obs = np.append(obs, self.fy)
         if self.observe_body_circulation:
-            body_circulation = -np.sum(self.state[2:]) * self.U * self.delta_t
+            body_circulation = -np.sum(self.state[2:]) * self.delta_x_wake
             obs = np.append(obs, body_circulation)
         if self.observe_pressure:
-            pressure_measurements = [compute_wake_pressure_diff(xp, self.state[2:], self.delta_t, rho=self.rho, U=self.U, c=self.c) for xp in self.pressure_sensor_positions]
+            pressure_measurements = [compute_wake_pressure_diff(xp, self.state[2:], self.x_wake, self.delta_x_wake, rho=self.rho, U=self.U, c=self.c) for xp in self.pressure_sensor_positions]
             obs = np.append(obs, pressure_measurements)
         return obs.astype(np.float32)
 
@@ -277,7 +268,8 @@ class WagnerEnv(gym.Env):
                 self.state[1],
                 self.alpha_ddot,
                 self.state[2:],
-                self.delta_t,
+                self.x_wake,
+                self.delta_x_wake,
                 rho=self.rho,
                 U=self.U,
                 c=self.c,
@@ -292,7 +284,7 @@ class WagnerEnv(gym.Env):
         elif self.reward_type == 3:
             reward = -abs(self.fy / self.lift_threshold) + 1
         elif self.reward_type == 5:
-            reward = -1 * (math.exp((self.fy / self.lift_threshold) ** 2) - 1) + 1 # v5
+            reward = -1 * (np.exp((self.fy / self.lift_threshold) ** 2) - 1) + 1 # v5
 
         # Update the time and time step
         self.t += self.delta_t
@@ -307,12 +299,13 @@ class WagnerEnv(gym.Env):
         self.state[2] = compute_new_wake_element(
                 self.state[0],
                 self.state[2:],
-                self.delta_t,
+                self.x_wake,
+                self.delta_x_wake,
                 U=self.U,
                 c=self.c)
 
         # Check if timelimit is reached
-        if self.t > self.t_max or math.isclose(self.t, self.t_max, rel_tol=1e-9):
+        if self.t > self.t_max or np.isclose(self.t, self.t_max, rtol=1e-9):
             self.truncated = True
         else:
             self.h_ddot = self.h_ddot_list[self.time_step]
