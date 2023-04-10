@@ -38,22 +38,21 @@ def compute_wake_pressure_diff(xp, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=
     p = -rho * U * delta_x_wake / np.pi * np.sum(gamma_wake * (x_wake + xp) / (np.sqrt(x_wake ** 2 - 0.25 * c ** 2) * np.sqrt(0.25 * c ** 2 - xp ** 2)))
     return p
 
+def compute_alpha_eff(h_dot, alpha, alpha_dot, U=1.0, c=1.0, a=1.0):
+    """
+    Compute the effective angle of attack from the angle of attack, angular velocity, and vertical velocity.
+    """
+    alpha_eff = -h_dot / U + alpha + (0.25 * c - a) * alpha_dot / U
+    return alpha_eff
+
 class WagnerEnv(gym.Env):
     """
-    ### State Space
-    The state is an `ndarray` with shape `(2 + t_wake_max / delta_t,)` where the elements correspond to the following:
-    | Index | State                                                                       | Min    | Max    | Unit    |
+    ### Observation Space
+    The observation is an `ndarray` with shape `(N,)` where the elements correspond to the following:
+    | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | effective angle of attack                                                   | -pi/18 | pi/18  | rad     |
+    |   0   | (effective) angle of attack                                                 | -pi/18 | pi/18  | rad     |
     |   1   | angular velocity of the wing                                                | -pi/18 | pi/18  | rad/s   |
-    |   2   | angular velocity of the wing                                                | -Inf   | Inf    | rad/s   |
-    |   3   | vortex sheet strength of the wake element released at the current time t    | -Inf   | Inf    | m/s     |
-    |   4   | vortex sheet strength of the wake element released at t - delta_t           | -Inf   | Inf    | m/s     |
-    |   .   |                                     .                                       |   .    |  .     |  .      | 
-    |   .   |                                     .                                       |   .    |  .     |  .      | 
-    |   .   |                                     .                                       |   .    |  .     |  .      | 
-    |  -1   | vortex sheet strength of the wake element released at t - t_wake_max        | -Inf   | Inf    | m/s     |
-
     """
     metadata = {"render_modes": ["ansi"], "render_fps": 4}
 
@@ -70,6 +69,7 @@ class WagnerEnv(gym.Env):
                  c=1,
                  a=0,
                  reward_type=1,
+                 observed_alpha_is_eff=False,
                  observe_wake=True,
                  observe_h_ddot=False,
                  observe_previous_lift=False,
@@ -92,12 +92,14 @@ class WagnerEnv(gym.Env):
         self.a = a
         self.reward_type = reward_type
 
-        self.alpha_eff_threshold = 10 * np.pi / 180
+        self.h_dot_threshold = 0.1 * U
         self.h_ddot_threshold = np.inf
+        self.alpha_threshold = 10 * np.pi / 180
         self.alpha_dot_threshold = 10 * np.pi / 180
         self.alpha_ddot_threshold = alpha_ddot_threshold
         self.lift_threshold = lift_threshold
 
+        self.observed_alpha_is_eff = observed_alpha_is_eff
         self.observe_wake = observe_wake
         self.observe_h_ddot = observe_h_ddot
         self.observe_previous_lift = observe_previous_lift
@@ -110,37 +112,25 @@ class WagnerEnv(gym.Env):
         self.x_wake = np.array([(i + 0.5) * U * delta_t + 0.5 * c for i in range(self.N_wake)])
         self.delta_x_wake = U * delta_t
 
-        # States are the wing's effective AOA, the angular velocity, and the states to describe the lift.
-        self.state_low = np.concatenate(
-            (
-                np.array(
-                    [
-                        -self.alpha_eff_threshold, # effective AOA
-                        -self.alpha_dot_threshold, # angular velocity of the wing
-                    ]
-                ),
-                np.full((self.N_wake,), -np.inf)
-            )
+        # The observations don't include the vertical velocity
+        # The first element is either the effective AOA or the actual one
+        obs_low = np.array(
+            [
+                -self.alpha_threshold, # effective AOA
+                -self.alpha_dot_threshold, # angular velocity of the wing
+            ]
         )
 
-        self.state_high = np.concatenate(
-            (
-                np.array(
-                    [
-                        self.alpha_eff_threshold, # effective AOA
-                        self.alpha_dot_threshold, # angular velocity of the wing
-                    ]
-                ),
-                np.full((self.N_wake,), np.inf)
-            )
+        obs_high = np.array(
+            [
+                self.alpha_threshold, # effective AOA
+                self.alpha_dot_threshold, # angular velocity of the wing
+            ]
         )
-
-        obs_low = self.state_low[0:2]
-        obs_high = self.state_high[0:2]
 
         if self.observe_wake:
-            obs_low = np.append(obs_low, self.state_low[2:])
-            obs_high = np.append(obs_high, self.state_high[2:])
+            obs_low = np.append(obs_low, np.full_like(self.x_wake, -np.inf))
+            obs_high = np.append(obs_high, np.full_like(self.x_wake, np.inf))
         if self.observe_h_ddot:
             obs_low = np.append(obs_low, -self.h_ddot_threshold)
             obs_high = np.append(obs_high, self.h_ddot_threshold)
@@ -166,15 +156,17 @@ class WagnerEnv(gym.Env):
 
         # Create the discrete system to advance non-wake states
         A = np.array([
-            [0, 1],
-            [0, 0],
+            [0, 0, 0],
+            [0, 0, 1],
+            [0, 0, 0],
         ])
         B = np.array([
-            [-1/U, (c/4-a)/U],
+            [1, 0],
+            [0, 0],
             [0, 1],
         ])
         C = np.array([
-            [0, 0],
+            [0, 0, 0],
         ])
         D = np.array([
             [0, 0],
@@ -198,23 +190,34 @@ class WagnerEnv(gym.Env):
         self.clock = None
 
     def _get_obs(self):
-        obs = self.state[0:2]
+        if self.observed_alpha_is_eff:
+            alpha_eff = compute_alpha_eff(self.kin_state[0], self.kin_state[1], self.kin_state[2], U=self.U, c=self.c, a=self.a)
+            obs = np.array([alpha_eff, self.kin_state[2]])
+        else:
+            obs = self.kin_state[1:]
         if self.observe_wake:
-            obs = np.append(obs, self.state[2:])
+            obs = np.append(obs, self.gamma_wake)
         if self.observe_h_ddot:
             obs = np.append(obs, self.h_ddot)
         if self.observe_previous_lift:
             obs = np.append(obs, self.fy)
         if self.observe_body_circulation:
-            body_circulation = -np.sum(self.state[2:]) * self.delta_x_wake
+            body_circulation = -np.sum(self.gamma_wake) * self.delta_x_wake
             obs = np.append(obs, body_circulation)
         if self.observe_pressure:
-            pressure_measurements = [compute_wake_pressure_diff(xp, self.state[2:], self.x_wake, self.delta_x_wake, rho=self.rho, U=self.U, c=self.c) for xp in self.pressure_sensor_positions]
+            pressure_measurements = [compute_wake_pressure_diff(xp, self.gamma_wake, self.x_wake, self.delta_x_wake, rho=self.rho, U=self.U, c=self.c) for xp in self.pressure_sensor_positions]
             obs = np.append(obs, pressure_measurements)
         return obs.astype(np.float32)
 
     def _get_info(self):
-        return {"previous fy": self.fy, "previous alpha_ddot": self.alpha_ddot, "current alpha_dot": self.state[1], "current alpha_eff": self.state[0], "current h_ddot": self.h_ddot, "current t": self.t, "current time_step": self.time_step}
+        alpha_eff = compute_alpha_eff(self.kin_state[0], self.kin_state[1], self.kin_state[2], U=self.U, c=self.c, a=self.a)
+        return {"previous fy": self.fy,
+                "previous alpha_ddot": self.alpha_ddot,
+                "current alpha_dot": self.kin_state[2],
+                "current alpha_eff": alpha_eff,
+                "current h_ddot": self.h_ddot,
+                "current t": self.t,
+                "current time_step": self.time_step}
 
     def reset(self, seed=None, options=None):
         # We need the following line to seed self.np_random
@@ -240,7 +243,8 @@ class WagnerEnv(gym.Env):
             print("No h_ddot provided, using zeros instead")
 
         self.h_ddot = self.h_ddot_list[self.time_step]
-        self.state = np.zeros(len(self.A) + self.N_wake)
+        self.kin_state = np.zeros(len(self.A))
+        self.gamma_wake = np.zeros(self.N_wake)
         self.fy = 0.0
         self.alpha_ddot = 0.0
 
@@ -254,7 +258,6 @@ class WagnerEnv(gym.Env):
 
     def step(self, action):
         assert self.h_ddot is not None, "Call reset before using step method."
-        assert self.state is not None, "Call reset before using step method."
 
         # Assign action to alpha_ddot
         if self.continuous_actions:
@@ -265,9 +268,9 @@ class WagnerEnv(gym.Env):
         # Compute the lift and reward
         self.fy = compute_lift(
                 self.h_ddot,
-                self.state[1],
+                self.kin_state[2],
                 self.alpha_ddot,
-                self.state[2:],
+                self.gamma_wake,
                 self.x_wake,
                 self.delta_x_wake,
                 rho=self.rho,
@@ -285,24 +288,28 @@ class WagnerEnv(gym.Env):
             reward = -abs(self.fy / self.lift_threshold) + 1
         elif self.reward_type == 5:
             reward = -1 * (np.exp((self.fy / self.lift_threshold) ** 2) - 1) + 1 # v5
+        else:
+            raise NotImplementedError("Specified reward type is not implemented.")
 
         # Update the time and time step
         self.t += self.delta_t
         self.time_step += 1
 
-        # Update state
+        # Update kinematic states
         u = np.array([self.h_ddot, self.alpha_ddot])
-        self.state[:2] = np.matmul(self.A, self.state[:2]) + np.dot(self.B, u)
+        self.kin_state = np.matmul(self.A, self.kin_state) + np.dot(self.B, u)
 
         # Update wake states
-        self.state[3:] = self.state[2:-1]
-        self.state[2] = compute_new_wake_element(
-                self.state[0],
-                self.state[2:],
+        alpha_eff = compute_alpha_eff(self.kin_state[0], self.kin_state[1], self.kin_state[2], U=self.U, c=self.c, a=self.a)
+        self.gamma_wake[1:] = self.gamma_wake[:-1]
+        self.gamma_wake[0] = compute_new_wake_element(
+                alpha_eff,
+                self.gamma_wake,
                 self.x_wake,
                 self.delta_x_wake,
                 U=self.U,
-                c=self.c)
+                c=self.c
+        )
 
         # Check if timelimit is reached
         if self.t > self.t_max or np.isclose(self.t, self.t_max, rtol=1e-9):
@@ -311,7 +318,7 @@ class WagnerEnv(gym.Env):
             self.h_ddot = self.h_ddot_list[self.time_step]
 
         # Check if state or lift goes out of bounds
-        if self.state[0] < -self.alpha_eff_threshold or self.state[0] > self.alpha_eff_threshold:
+        if self.kin_state[1] < -self.alpha_threshold or self.kin_state[1] > self.alpha_threshold:
             self.terminated = True
         if self.fy < -self.lift_threshold or self.fy > self.lift_threshold:
             self.terminated = True
@@ -330,11 +337,16 @@ class WagnerEnv(gym.Env):
             return self._render_text()
 
     def _render_text(self):
+        if self.observed_alpha_is_eff:
+            shown_alpha = compute_alpha_eff(self.kin_state[0], self.kin_state[1], self.kin_state[2], U=self.U, c=self.c, a=self.a)
+        else:
+            shown_alpha = self.kin_state[1]
         outfile = StringIO()
         outfile.write("{:5d}{:10.5f}".format(self.time_step, self.t))
-        outfile.write((" {:10.3e}"*3).format(
-            self.state[0],
-            self.state[1],
+        outfile.write((" {:10.3e}" * 4).format(
+            self.kin_state[0],
+            shown_alpha,
+            self.kin_state[2],
             self.h_ddot,
         ))
         with closing(outfile):
