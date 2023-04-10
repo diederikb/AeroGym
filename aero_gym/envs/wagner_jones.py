@@ -1,6 +1,5 @@
 import gymnasium as gym
 from gymnasium import spaces
-import math
 import numpy as np
 from scipy import signal
 from io import StringIO
@@ -8,13 +7,20 @@ from contextlib import closing
 
 #TODO: use observation wrappers (with dicts) instead of observe_wake and observe_h_ddot
 
+def compute_alpha(h_dot, alpha_eff, alpha_dot, U=1.0, c=1.0, a=1.0):
+    """
+    Compute the angle of attack from the effective angle of attack, angular velocity, and vertical velocity.
+    """
+    alpha = h_dot / U + alpha_eff - (0.25 * c - a) * alpha_dot / U
+    return alpha
+
 class WagnerJonesEnv(gym.Env):
     """
     ### Observation Space
     The observation is an `ndarray` with shape `(4,)` where the elements correspond to the following:
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | effective angle of attack                                                   | -pi/18 | pi/18  | rad     |
+    |   0   | (effective) angle of attack                                                 | -pi/18 | pi/18  | rad     |
     |   1   | angular velocity of the wing                                                | -pi/18 | pi/18  | rad/s   |
     |   2   | Theodorsen's function state 1 (R.T. Jones approximation)                    | -Inf   | Inf    | -       |
     |   3   | Theodorsen's function state 2 (R.T. Jones approximation)                    | -Inf   | Inf    | -       |
@@ -35,6 +41,7 @@ class WagnerJonesEnv(gym.Env):
                  c=1,
                  a=0,
                  reward_type=1,
+                 observed_alpha_is_eff=False,
                  observe_wake=True,
                  observe_h_ddot=False,
                  observe_previous_lift=False,
@@ -54,47 +61,43 @@ class WagnerJonesEnv(gym.Env):
         self.a = a
         self.reward_type = reward_type
 
-        self.alpha_eff_threshold = 10 * math.pi / 180
+        self.h_dot_threshold = 0.1 * U
         self.h_ddot_threshold = np.inf
-        self.alpha_dot_threshold = 10 * math.pi / 180
+        self.alpha_threshold = 10 * np.pi / 180
+        self.alpha_dot_threshold = 10 * np.pi / 180
         self.alpha_ddot_threshold = alpha_ddot_threshold
         self.lift_threshold = lift_threshold
 
+        self.observed_alpha_is_eff = observed_alpha_is_eff
         self.observe_wake = observe_wake
         self.observe_h_ddot = observe_h_ddot
         self.observe_previous_lift = observe_previous_lift
 
-        # States are the wing's effective AOA, the angular velocity, and the states for Theodorsen's function approximation. 
-        self.state_low = np.array(
+        # The observations don't include the vertical velocity
+        # The first element is either the effective AOA or the actual one
+        obs_low = np.array(
             [
-                -self.alpha_eff_threshold, # effective AOA
+                -self.alpha_threshold, # effective AOA
                 -self.alpha_dot_threshold, # angular velocity of the wing
-                -np.inf,
-                -np.inf
             ]
-        ).astype(np.float32)
+        )
 
-        self.state_high = np.array(
+        obs_high = np.array(
             [
-                self.alpha_eff_threshold, # effective AOA
+                self.alpha_threshold, # effective AOA
                 self.alpha_dot_threshold, # angular velocity of the wing
-                np.inf,
-                np.inf
             ]
-        ).astype(np.float32)
-
-        obs_low = self.state_low[0:2]
-        obs_high = self.state_high[0:2]
+        )
 
         if self.observe_wake:
-            obs_low = np.append(obs_low, self.state_low[2:])
-            obs_high = np.append(obs_high, self.state_high[2:])
+            obs_low = np.append(obs_low, np.full(2, -np.inf))
+            obs_high = np.append(obs_high, np.full(2, np.inf))
         if self.observe_h_ddot:
-            obs_low = np.append(obs_low, -np.float32(self.h_ddot_threshold))
-            obs_high = np.append(obs_high, np.float32(self.h_ddot_threshold))
+            obs_low = np.append(obs_low, -self.h_ddot_threshold)
+            obs_high = np.append(obs_high, self.h_ddot_threshold)
         if self.observe_previous_lift:
-            obs_low = np.append(obs_low, -np.float32(self.lift_threshold))
-            obs_high = np.append(obs_high, np.float32(self.lift_threshold))
+            obs_low = np.append(obs_low, -self.lift_threshold)
+            obs_high = np.append(obs_high, self.lift_threshold)
 
         self.observation_space = spaces.Box(obs_low, obs_high, (len(obs_low),), dtype=np.float32)
 
@@ -108,8 +111,8 @@ class WagnerJonesEnv(gym.Env):
 
         # Create the discrete system from the continuous system
         # Theodorsen's function:
-        C1 = math.pi/2
-        C2 = 2*math.pi
+        C1 = np.pi/2
+        C2 = 2*np.pi
         Atilde = np.array([[-0.691, -0.0546], [1, 0]])
         Btilde = np.array([[1], [0]])
         Ctilde = np.array([[0.2161, 0.0273]])
@@ -157,17 +160,27 @@ class WagnerJonesEnv(gym.Env):
         self.clock = None
 
     def _get_obs(self):
-        obs = self.state[0:2]
+        if not self.observed_alpha_is_eff:
+            alpha = compute_alpha(self.h_dot, self.state[0], self.state[1], U=self.U, c=self.c, a=self.a)
+            obs = np.array([alpha, self.state[1]])
+        else:
+            obs = self.state[0:2]
         if self.observe_wake:
             obs = np.append(obs, self.state[2:])
         if self.observe_h_ddot:
             obs = np.append(obs, self.h_ddot)
         if self.observe_previous_lift:
             obs = np.append(obs, self.fy)
-        return obs
+        return obs.astype(np.float32)
 
     def _get_info(self):
-        return {"previous fy": self.fy, "previous alpha_ddot": self.alpha_ddot, "current alpha_dot": self.state[1], "current alpha_eff": self.state[0], "current h_ddot": self.h_ddot, "current t": self.t, "current time_step": self.time_step}
+        return {"previous fy": self.fy,
+                "previous alpha_ddot": self.alpha_ddot,
+                "current alpha_dot": self.state[1],
+                "current alpha_eff": self.state[0],
+                "current h_ddot": self.h_ddot,
+                "current t": self.t,
+                "current time_step": self.time_step}
 
     def reset(self, seed=None, options=None):
         # We need the following line to seed self.np_random
@@ -185,17 +198,18 @@ class WagnerJonesEnv(gym.Env):
                 assert len(options["h_ddot_prescribed"]) >= int(self.t_max / self.delta_t), "The prescribed vertical acceleration has not enough entries for the whole simulation (starting at t=0)"
                 self.h_ddot_prescribed = options["h_ddot_prescribed"]
         if self.h_ddot_prescribed is not None:
-            self.h_ddot_list = np.array(self.h_ddot_prescribed, dtype=np.float32)
+            self.h_ddot_list = np.array(self.h_ddot_prescribed)
         elif self.h_ddot_generator is not None:
-            self.h_ddot_list = np.array(self.h_ddot_generator(self), dtype=np.float32)
+            self.h_ddot_list = np.array(self.h_ddot_generator(self))
         else:
-            self.h_ddot_list = np.zeros(int(self.t_max / self.delta_t), dtype=np.float32)
+            self.h_ddot_list = np.zeros(int(self.t_max / self.delta_t))
             print("No h_ddot provided, using zeros instead")
 
+        self.h_dot = 0.0 # Keep track of h_dot to compute alpha from alpha_eff
         self.h_ddot = self.h_ddot_list[self.time_step]
-        self.state = np.zeros(len(self.A), dtype=np.float32)
-        self.fy = np.float32(0.0)
-        self.alpha_ddot = np.float32(0.0)
+        self.state = np.zeros(len(self.A))
+        self.fy = 0.0
+        self.alpha_ddot = 0.0
 
         observation = self._get_obs()
         info = self._get_info()
@@ -229,7 +243,9 @@ class WagnerJonesEnv(gym.Env):
         elif self.reward_type == 3:
             reward = -abs(self.fy / self.lift_threshold) + 1
         elif self.reward_type == 5:
-            reward = -1 * (math.exp((self.fy / self.lift_threshold) ** 2) - 1) + 1 # v5
+            reward = -1 * (np.exp((self.fy / self.lift_threshold) ** 2) - 1) + 1 # v5
+        else:
+            raise NotImplementedError("Specified reward type is not implemented.")
 
         # Update the time and time step
         self.t += self.delta_t
@@ -237,15 +253,16 @@ class WagnerJonesEnv(gym.Env):
 
         # Update state
         self.state = np.matmul(self.A, self.state) + np.dot(self.B, u)
+        self.h_dot = self.h_dot + self.delta_t * self.h_ddot
 
         # Check if timelimit is reached
-        if self.t > self.t_max or math.isclose(self.t, self.t_max, rel_tol=1e-9):
+        if self.t > self.t_max or np.isclose(self.t, self.t_max, rtol=1e-9):
             self.truncated = True
         else:
             self.h_ddot = self.h_ddot_list[self.time_step]
 
         # Check if state or lift goes out of bounds
-        if self.state[0] < -self.alpha_eff_threshold or self.state[0] > self.alpha_eff_threshold:
+        if self.state[0] < -self.alpha_threshold or self.state[0] > self.alpha_threshold:
             self.terminated = True
         if self.fy < -self.lift_threshold or self.fy > self.lift_threshold:
             self.terminated = True
@@ -264,10 +281,15 @@ class WagnerJonesEnv(gym.Env):
             return self._render_text()
 
     def _render_text(self):
+        if self.observed_alpha_is_eff:
+            shown_alpha = self.state[0]
+        else:
+            shown_alpha = compute_alpha(self.h_dot, self.state[0], self.state[1], U=self.U, c=self.c, a=self.a)
         outfile = StringIO()
         outfile.write("{:5d}{:10.5f}".format(self.time_step, self.t))
-        outfile.write((" {:10.3e}"*3).format(
-            self.state[0],
+        outfile.write((" {:10.3e}" * 4).format(
+            self.h_dot,
+            shown_alpha,
             self.state[1],
             self.h_ddot,
         ))
