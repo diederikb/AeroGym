@@ -48,11 +48,56 @@ def compute_alpha_eff(h_dot, alpha, alpha_dot, U=1.0, c=1.0, a=1.0):
 class WagnerEnv(gym.Env):
     """
     ### Observation Space
-    The observation is an `ndarray` with shape `(N,)` where the elements correspond to the following:
+
+    The default observation space is an `ndarray` with shape `(2,)` where the elements correspond to the following:
+    The observed angle of attack is by default the angle of the wing with U but can be changed to the effective one by setting `observed_alpha_is_eff`.
+
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | (effective) angle of attack                                                 | -pi/18 | pi/18  | rad     |
-    |   1   | angular velocity of the wing                                                | -pi/18 | pi/18  | rad/s   |
+    |   0   | (effective) angle of attack at the current timestep                         | -pi/18 | pi/18  | rad     |
+    |   1   | angular velocity of the wing at the current timestep                        | -pi/18 | pi/18  | rad/s   |
+
+    Setting the following keyword arguments to `True` will append the observation space with the following arrays (in the order that is given here):
+
+    `observe_wake` (N = `t_max` / `delta_t`)
+
+    | Index | Observation                                                                 | Min    | Max    | Unit    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | vortex sheet strength of the wake element released at the current timestep  | -Inf   |  Inf   | m/s     |
+    |   1   | vortex sheet strength of the wake element released at the previous timestep | -Inf   |  Inf   | m/s     |
+    |   .   |                                     .                                       |   .    |   .    |  .      |
+    |   .   |                                     .                                       |   .    |   .    |  .      |
+    |   .   |                                     .                                       |   .    |   .    |  .      |
+    |  N-1  | vortex sheet strength of the wake element released at t - `t_max`           | -Inf   |  Inf   | m/s     |
+
+    `observe_h_ddot`
+
+    | Index | Observation                                                                 | Min    | Max    | Unit    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | vertical acceleration of the wing at the current timestep                   |-0.1U/dt| 0.1U/dt| m/s^2   |
+
+    `observe_previous_lift`
+
+    | Index | Observation                                                                 | Min    | Max    | Unit    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | lift at the previous timestep (per unit depth)                              |see args|see args| kg/s^2  |
+
+    `observe_body_circulation`
+
+    | Index | Observation                                                                 | Min    | Max    | Unit    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | circulation about the flat plate at the current timestep                    |see args|see args| m^2/s   |
+
+    `observe_pressure` (N = length of `pressure_sensor_positions`)
+    
+    | Index | Observation                                                                 | Min    | Max    | Unit    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | pressure at the first pressure sensor position at the current timestep      | -Inf   |  Inf   | kg/ms^2 |
+    |   .   |                                     .                                       |   .    |   .    |    .    |
+    |   .   |                                     .                                       |   .    |   .    |    .    |
+    |   .   |                                     .                                       |   .    |   .    |    .    |
+    |  N-1  | pressure at the last pressure sensor position at the current timestep       | -Inf   |  Inf   | kg/ms^2 |
+
     """
     metadata = {"render_modes": ["ansi"], "render_fps": 4}
 
@@ -70,7 +115,7 @@ class WagnerEnv(gym.Env):
                  a=0,
                  reward_type=1,
                  observed_alpha_is_eff=False,
-                 observe_wake=True,
+                 observe_wake=False,
                  observe_h_ddot=False,
                  observe_previous_lift=False,
                  observe_body_circulation=False,
@@ -93,8 +138,8 @@ class WagnerEnv(gym.Env):
         self.reward_type = reward_type
 
         self.h_dot_threshold = 0.1 * U
-        self.h_ddot_threshold = np.inf
-        self.alpha_threshold = 10 * np.pi / 180
+        self.h_ddot_threshold = 0.1 * U / delta_t
+        self.alpha_eff_threshold = 10 * np.pi / 180
         self.alpha_dot_threshold = 10 * np.pi / 180
         self.alpha_ddot_threshold = alpha_ddot_threshold
         self.lift_threshold = lift_threshold
@@ -116,14 +161,14 @@ class WagnerEnv(gym.Env):
         # The first element is either the effective AOA or the actual one
         obs_low = np.array(
             [
-                -self.alpha_threshold, # effective AOA
+                -self.alpha_eff_threshold, # effective AOA
                 -self.alpha_dot_threshold, # angular velocity of the wing
             ]
         )
 
         obs_high = np.array(
             [
-                self.alpha_threshold, # effective AOA
+                self.alpha_eff_threshold, # effective AOA
                 self.alpha_dot_threshold, # angular velocity of the wing
             ]
         )
@@ -317,8 +362,9 @@ class WagnerEnv(gym.Env):
         else:
             self.h_ddot = self.h_ddot_list[self.time_step]
 
-        # Check if state or lift goes out of bounds
-        if self.kin_state[1] < -self.alpha_threshold or self.kin_state[1] > self.alpha_threshold:
+        # Check if alpha_eff or lift goes out of bounds
+        alpha_eff = compute_alpha_eff(self.kin_state[0], self.kin_state[1], self.kin_state[2], U=self.U, c=self.c, a=self.a)
+        if alpha_eff < -self.alpha_eff_threshold or alpha_eff > self.alpha_eff_threshold:
             self.terminated = True
         if self.fy < -self.lift_threshold or self.fy > self.lift_threshold:
             self.terminated = True
