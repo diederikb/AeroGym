@@ -215,6 +215,8 @@ class WagnerJonesEnv(gym.Env):
             if "h_ddot_prescribed" in options:
                 assert len(options["h_ddot_prescribed"]) >= int(self.t_max / self.delta_t), "The prescribed vertical acceleration has not enough entries for the whole simulation (starting at t=0)"
                 self.h_ddot_prescribed = options["h_ddot_prescribed"]
+            if "h_ddot_generator" in options:
+                self.h_ddot_generator = options["h_ddot_generator"]
         if self.h_ddot_prescribed is not None:
             self.h_ddot_list = np.array(self.h_ddot_prescribed)
         elif self.h_ddot_generator is not None:
