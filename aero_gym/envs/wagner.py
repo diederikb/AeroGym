@@ -47,15 +47,33 @@ def compute_alpha_eff(h_dot, alpha, alpha_dot, U=1.0, c=1.0, a=1.0):
 
 class WagnerEnv(gym.Env):
     """
-    ### Observation Space
+    ## Action space
+
+    The action represents the angular acceleration (alpha_ddot) applied at a distance `a` from the midchord position.
+
+    The action space depends on the values of the arguments `continuous_actions`, `num_discrete_actions`, `alpha_ddot_scale`.
+
+    If `continuous_actions` is `False` and N = `num_discrete_actions`:
+
+    | Index | Action                                                          | Min | Max   | Unit |
+    |-------|-----------------------------------------------------------------|-----|-------|------|
+    |   0   | i => alpha_ddot = (2 * i  / ( N - 1 ) - 1 ) * alpha_ddot_scale  |  0  | N - 1 |  -   |
+
+    If `continuous_actions` is `True`:
+
+    | Index | Action                                                          | Min | Max | Unit    |
+    |-------|-----------------------------------------------------------------|-----|-----|---------|
+    |   0   | value => alpha_ddot = value * alpha_ddot_scale                  | -1  | 1   |    -    |
+
+    ## Observation Space
 
     The default observation space is an `ndarray` with shape `(2,)` where the elements correspond to the following:
     The observed angle of attack is by default the angle of the wing with U but can be changed to the effective one by setting `observed_alpha_is_eff`.
 
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | (effective) angle of attack at the current timestep                         | -pi/18 | pi/18  | rad     |
-    |   1   | angular velocity of the wing at the current timestep                        | -pi/18 | pi/18  | rad/T   |
+    |   0   | (effective) angle of attack at the current timestep                         |see args|see args| rad     |
+    |   1   | angular velocity of the wing at the current timestep                        | -Inf   |  Inf   | rad/T   |
 
     Setting the following keyword arguments to `True` will append the observation space with the following arrays (in the order that is given here):
 
@@ -121,8 +139,10 @@ class WagnerEnv(gym.Env):
                  observe_body_circulation=False,
                  observe_pressure=False,
                  pressure_sensor_positions=[],
-                 lift_threshold=0.01,
-                 alpha_ddot_threshold=0.1):
+                 lift_scale=0.1,
+                 lift_termination=False,
+                 alpha_ddot_scale=0.1,
+                 h_ddot_scale=0.05):
         self.continuous_actions = continuous_actions
         self.num_discrete_actions = num_discrete_actions
         self.delta_t = delta_t  # The time step size of the simulation
@@ -137,12 +157,13 @@ class WagnerEnv(gym.Env):
         self.a = a
         self.reward_type = reward_type
 
-        self.h_dot_threshold = 0.1 * U
-        self.h_ddot_threshold = 0.1 * U / delta_t
-        self.alpha_eff_threshold = 10 * np.pi / 180
-        self.alpha_dot_threshold = 10 * np.pi / 180
-        self.alpha_ddot_threshold = alpha_ddot_threshold
-        self.lift_threshold = lift_threshold
+        self.h_ddot_scale = h_ddot_scale
+        self.alpha_eff_scale = lift_scale
+        self.alpha_scale = lift_scale
+        self.alpha_dot_scale = h_ddot_scale / U
+        self.alpha_ddot_scale = alpha_ddot_scale
+        self.lift_scale = lift_scale
+        self.lift_termination = lift_termination
 
         self.observed_alpha_is_eff = observed_alpha_is_eff
         self.observe_wake = observe_wake
@@ -161,15 +182,15 @@ class WagnerEnv(gym.Env):
         # The first element is either the effective AOA or the actual one
         obs_low = np.array(
             [
-                -self.alpha_eff_threshold, # effective AOA
-                -self.alpha_dot_threshold, # angular velocity of the wing
+                -self.alpha_eff_scale, # effective AOA
+                -self.alpha_dot_scale, # angular velocity of the wing
             ]
         )
 
         obs_high = np.array(
             [
-                self.alpha_eff_threshold, # effective AOA
-                self.alpha_dot_threshold, # angular velocity of the wing
+                self.alpha_eff_scale, # effective AOA
+                self.alpha_dot_scale, # angular velocity of the wing
             ]
         )
 
@@ -177,11 +198,11 @@ class WagnerEnv(gym.Env):
             obs_low = np.append(obs_low, np.full_like(self.x_wake, -np.inf))
             obs_high = np.append(obs_high, np.full_like(self.x_wake, np.inf))
         if self.observe_h_ddot:
-            obs_low = np.append(obs_low, -self.h_ddot_threshold)
-            obs_high = np.append(obs_high, self.h_ddot_threshold)
+            obs_low = np.append(obs_low, -self.h_ddot_scale)
+            obs_high = np.append(obs_high, self.h_ddot_scale)
         if self.observe_previous_lift:
-            obs_low = np.append(obs_low, -self.lift_threshold)
-            obs_high = np.append(obs_high, self.lift_threshold)
+            obs_low = np.append(obs_low, -self.lift_scale)
+            obs_high = np.append(obs_high, self.lift_scale)
         if self.observe_body_circulation:
             obs_low = np.append(obs_low, -np.inf)
             obs_high = np. append(obs_high, np.inf)
@@ -197,7 +218,7 @@ class WagnerEnv(gym.Env):
             self.action_space = spaces.Box(-1, 1, (1,), dtype=np.float32)
         else:
             self.action_space = spaces.Discrete(self.num_discrete_actions)
-        self.discrete_action_values = self.alpha_ddot_threshold * np.linspace(-1, 1, num=self.num_discrete_actions) ** 3
+        self.discrete_action_values = self.alpha_ddot_scale * np.linspace(-1, 1, num=self.num_discrete_actions) ** 3
 
         # Create the discrete system to advance non-wake states
         A = np.array([
@@ -241,16 +262,16 @@ class WagnerEnv(gym.Env):
         else:
             obs = self.kin_state[1:]
         if self.observe_wake:
-            obs = np.append(obs, self.gamma_wake)
+            obs = np.append(obs, self.wake_state)
         if self.observe_h_ddot:
             obs = np.append(obs, self.h_ddot)
         if self.observe_previous_lift:
             obs = np.append(obs, self.fy)
         if self.observe_body_circulation:
-            body_circulation = -np.sum(self.gamma_wake) * self.delta_x_wake
+            body_circulation = -np.sum(self.wake_state) * self.delta_x_wake
             obs = np.append(obs, body_circulation)
         if self.observe_pressure:
-            pressure_measurements = [compute_wake_pressure_diff(xp, self.gamma_wake, self.x_wake, self.delta_x_wake, rho=self.rho, U=self.U, c=self.c) for xp in self.pressure_sensor_positions]
+            pressure_measurements = [compute_wake_pressure_diff(xp, self.wake_state, self.x_wake, self.delta_x_wake, rho=self.rho, U=self.U, c=self.c) for xp in self.pressure_sensor_positions]
             obs = np.append(obs, pressure_measurements)
         return obs.astype(np.float32)
 
@@ -291,7 +312,7 @@ class WagnerEnv(gym.Env):
 
         self.h_ddot = self.h_ddot_list[self.time_step]
         self.kin_state = np.zeros(len(self.A))
-        self.gamma_wake = np.zeros(self.N_wake)
+        self.wake_state = np.zeros(self.N_wake)
         self.fy = 0.0
         self.alpha_ddot = 0.0
 
@@ -308,7 +329,7 @@ class WagnerEnv(gym.Env):
 
         # Assign action to alpha_ddot
         if self.continuous_actions:
-            self.alpha_ddot = action[0] * self.alpha_ddot_threshold
+            self.alpha_ddot = action[0] * self.alpha_ddot_scale
         else:
             self.alpha_ddot = self.discrete_action_values[action] 
 
@@ -317,7 +338,7 @@ class WagnerEnv(gym.Env):
                 self.h_ddot,
                 self.kin_state[2],
                 self.alpha_ddot,
-                self.gamma_wake,
+                self.wake_state,
                 self.x_wake,
                 self.delta_x_wake,
                 rho=self.rho,
@@ -326,15 +347,15 @@ class WagnerEnv(gym.Env):
                 a=self.a)
 
         # Compute the reward
-        #reward = 1 - (self.fy / self.lift_threshold) ** 2
+        #reward = 1 - (self.fy / self.lift_scale) ** 2
         if self.reward_type == 1:
             reward = -(self.fy ** 2) # v1
         elif self.reward_type == 2:
             reward = -(self.fy ** 2 + 0.1 * self.alpha_ddot ** 2) # v2
         elif self.reward_type == 3:
-            reward = -abs(self.fy / self.lift_threshold) + 1
+            reward = -abs(self.fy / self.lift_scale) + 1
         elif self.reward_type == 5:
-            reward = -1 * (np.exp((self.fy / self.lift_threshold) ** 2) - 1) + 1 # v5
+            reward = -1 * (np.exp((self.fy / self.lift_scale) ** 2) - 1) + 1 # v5
         else:
             raise NotImplementedError("Specified reward type is not implemented.")
 
@@ -348,10 +369,10 @@ class WagnerEnv(gym.Env):
 
         # Update wake states
         alpha_eff = compute_alpha_eff(self.kin_state[0], self.kin_state[1], self.kin_state[2], U=self.U, c=self.c, a=self.a)
-        self.gamma_wake[1:] = self.gamma_wake[:-1]
-        self.gamma_wake[0] = compute_new_wake_element(
+        self.wake_state[1:] = self.wake_state[:-1]
+        self.wake_state[0] = compute_new_wake_element(
                 alpha_eff,
-                self.gamma_wake,
+                self.wake_state,
                 self.x_wake,
                 self.delta_x_wake,
                 U=self.U,
@@ -364,11 +385,8 @@ class WagnerEnv(gym.Env):
         else:
             self.h_ddot = self.h_ddot_list[self.time_step]
 
-        # Check if alpha_eff or lift goes out of bounds
-        alpha_eff = compute_alpha_eff(self.kin_state[0], self.kin_state[1], self.kin_state[2], U=self.U, c=self.c, a=self.a)
-        if alpha_eff < -self.alpha_eff_threshold or alpha_eff > self.alpha_eff_threshold:
-            self.terminated = True
-        if self.fy < -self.lift_threshold or self.fy > self.lift_threshold:
+        # Check if lift goes out of bounds
+        if self.lift_termination and (self.fy < -self.lift_scale or self.fy > self.lift_scale):
             self.terminated = True
 
         # Create observation for next state
