@@ -23,7 +23,7 @@ class WagnerJonesEnv(gym.Env):
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
     |   0   | (effective) angle of attack at the current timestep                         | -pi/18 | pi/18  | rad     |
-    |   1   | angular velocity of the wing at the current timestep                        | -pi/18 | pi/18  | rad/s   |
+    |   1   | angular velocity of the wing at the current timestep                        | -pi/18 | pi/18  | rad/T   |
     Setting the following keyword arguments to `True` will append the observation space with the following arrays (in the order that is given here):
 
     `observe_wake` (N = `t_max` / `delta_t`)
@@ -36,13 +36,13 @@ class WagnerJonesEnv(gym.Env):
 
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | vertical acceleration of the wing at the current timestep                   |-0.1U/dt| 0.1U/dt| m/s^2   |
+    |   0   | vertical acceleration of the wing at the current timestep                   |-0.1U/dt| 0.1U/dt| L/T^2   |
 
     `observe_previous_lift`
 
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | lift at the previous timestep (per unit depth)                              |see args|see args| kg/s^2  |
+    |   0   | lift at the previous timestep (per unit depth)                              |see args|see args| M/T^2   |
     """
     metadata = {"render_modes": ["ansi"], "render_fps": 4}
 

@@ -55,7 +55,7 @@ class WagnerEnv(gym.Env):
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
     |   0   | (effective) angle of attack at the current timestep                         | -pi/18 | pi/18  | rad     |
-    |   1   | angular velocity of the wing at the current timestep                        | -pi/18 | pi/18  | rad/s   |
+    |   1   | angular velocity of the wing at the current timestep                        | -pi/18 | pi/18  | rad/T   |
 
     Setting the following keyword arguments to `True` will append the observation space with the following arrays (in the order that is given here):
 
@@ -63,40 +63,40 @@ class WagnerEnv(gym.Env):
 
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | vortex sheet strength of the wake element released at the current timestep  | -Inf   |  Inf   | m/s     |
-    |   1   | vortex sheet strength of the wake element released at the previous timestep | -Inf   |  Inf   | m/s     |
+    |   0   | vortex sheet strength of the wake element released at the current timestep  | -Inf   |  Inf   | L/T     |
+    |   1   | vortex sheet strength of the wake element released at the previous timestep | -Inf   |  Inf   | L/T     |
     |   .   |                                     .                                       |   .    |   .    |  .      |
     |   .   |                                     .                                       |   .    |   .    |  .      |
     |   .   |                                     .                                       |   .    |   .    |  .      |
-    |  N-1  | vortex sheet strength of the wake element released at t - `t_max`           | -Inf   |  Inf   | m/s     |
+    |  N-1  | vortex sheet strength of the wake element released at t - `t_max`           | -Inf   |  Inf   | L/T     |
 
     `observe_h_ddot`
 
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | vertical acceleration of the wing at the current timestep                   |-0.1U/dt| 0.1U/dt| m/s^2   |
+    |   0   | vertical acceleration of the wing at the current timestep                   |-0.1U/dt| 0.1U/dt| L/T^2   |
 
     `observe_previous_lift`
 
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | lift at the previous timestep (per unit depth)                              |see args|see args| kg/s^2  |
+    |   0   | lift at the previous timestep (per unit depth)                              |see args|see args| M/T^2   |
 
     `observe_body_circulation`
 
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | circulation about the flat plate at the current timestep                    |see args|see args| m^2/s   |
+    |   0   | circulation about the flat plate at the current timestep                    |see args|see args| L^2/T   |
 
     `observe_pressure` (N = length of `pressure_sensor_positions`)
     
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | pressure at the first pressure sensor position at the current timestep      | -Inf   |  Inf   | kg/ms^2 |
+    |   0   | pressure at the first pressure sensor position at the current timestep      | -Inf   |  Inf   | M/LT^2  |
     |   .   |                                     .                                       |   .    |   .    |    .    |
     |   .   |                                     .                                       |   .    |   .    |    .    |
     |   .   |                                     .                                       |   .    |   .    |    .    |
-    |  N-1  | pressure at the last pressure sensor position at the current timestep       | -Inf   |  Inf   | kg/ms^2 |
+    |  N-1  | pressure at the last pressure sensor position at the current timestep       | -Inf   |  Inf   | M/LT^2  |
 
     """
     metadata = {"render_modes": ["ansi"], "render_fps": 4}
