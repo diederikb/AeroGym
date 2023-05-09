@@ -350,6 +350,18 @@ class WagnerEnv(gym.Env):
         else:
             self.alpha_ddot = self.discrete_action_values[action] 
 
+        # Update non-Jones wake states (because there is no D matrix like D_theo)
+        if not self.use_jones_approx:
+            self.wake_state[1:] = self.wake_state[:-1]
+            self.wake_state[0] = compute_new_wake_element(
+                    self.kin_state[3],
+                    self.wake_state,
+                    self.x_wake,
+                    self.delta_x_wake,
+                    U=self.U,
+                    c=self.c
+            )
+
         # Compute the lift and reward
         if self.use_jones_approx:
             CL = compute_jones_circulatory_lift(
@@ -393,20 +405,10 @@ class WagnerEnv(gym.Env):
         self.t += self.delta_t
         self.time_step += 1
 
-        # Update wake states (before updating kinematic states)
+        # Update Jones wake states (before updating kinematic states)
         if self.use_jones_approx:
             u = np.array([2 * np.pi * self.kin_state[3]])
             self.wake_state = np.matmul(self.theo_A, self.wake_state) + np.dot(self.theo_B, u)
-        else:
-            self.wake_state[1:] = self.wake_state[:-1]
-            self.wake_state[0] = compute_new_wake_element(
-                    self.kin_state[3],
-                    self.wake_state,
-                    self.x_wake,
-                    self.delta_x_wake,
-                    U=self.U,
-                    c=self.c
-            )
 
         # Update kinematic states
         u = np.array([self.h_ddot, self.alpha_ddot])
