@@ -7,6 +7,7 @@ from contextlib import closing
 
 #TODO: use observation wrappers (with dicts) instead of observe_wake and observe_h_ddot
 #TODO: assert xp's are between -c/2 and c/2
+#TODO: check scalings for alpha_dot, h_dot, alpha, and alpha_eff
 
 def compute_new_wake_element(alpha_eff, gamma_wake, x_wake, delta_x_wake, U=1.0, c=1.0):
     """
@@ -140,8 +141,8 @@ class WagnerEnv(gym.Env):
                  observe_body_circulation=False,
                  observe_pressure=False,
                  pressure_sensor_positions=[],
-                 lift_scale=0.1,
                  lift_termination=False,
+                 lift_scale=0.1,
                  alpha_ddot_scale=0.1,
                  h_ddot_scale=0.05):
         self.continuous_actions = continuous_actions
@@ -159,6 +160,7 @@ class WagnerEnv(gym.Env):
         self.use_jones_approx = use_jones_approx
         self.reward_type = reward_type
 
+        self.h_dot_scale = lift_scale * U
         self.h_ddot_scale = h_ddot_scale
         self.alpha_eff_scale = lift_scale
         self.alpha_scale = lift_scale
@@ -187,15 +189,15 @@ class WagnerEnv(gym.Env):
         # The first element is either the effective AOA or the actual one
         obs_low = np.array(
             [
-                -self.alpha_eff_scale, # effective AOA
-                -self.alpha_dot_scale, # angular velocity of the wing
+                -np.inf, # effective AOA
+                -np.inf, # angular velocity of the wing
             ]
         )
 
         obs_high = np.array(
             [
-                self.alpha_eff_scale, # effective AOA
-                self.alpha_dot_scale, # angular velocity of the wing
+                np.inf, # effective AOA
+                np.inf, # angular velocity of the wing
             ]
         )
 
@@ -203,11 +205,11 @@ class WagnerEnv(gym.Env):
             obs_low = np.append(obs_low, np.full(self.N_wake_states, -np.inf))
             obs_high = np.append(obs_high, np.full(self.N_wake_states, np.inf))
         if self.observe_h_ddot:
-            obs_low = np.append(obs_low, -self.h_ddot_scale)
-            obs_high = np.append(obs_high, self.h_ddot_scale)
+            obs_low = np.append(obs_low, -np.inf)
+            obs_high = np.append(obs_high, np.inf)
         if self.observe_previous_lift:
-            obs_low = np.append(obs_low, -self.lift_scale)
-            obs_high = np.append(obs_high, self.lift_scale)
+            obs_low = np.append(obs_low, -np.inf)
+            obs_high = np.append(obs_high, np.inf)
         if self.observe_body_circulation:
             obs_low = np.append(obs_low, -np.inf)
             obs_high = np. append(obs_high, np.inf)
@@ -276,15 +278,15 @@ class WagnerEnv(gym.Env):
 
     def _get_obs(self):
         if self.observed_alpha_is_eff:
-            obs = np.array([self.kin_state[3], self.kin_state[2]])
+            obs = np.array([self.kin_state[3] / self.alpha_eff_scale, self.kin_state[2] / self.alpha_dot_scale])
         else:
-            obs = self.kin_state[1:3]
+            obs = np.array([self.kin_state[1] / self.alpha_scale, self.kin_state[2] / self.alpha_dot_scale])
         if self.observe_wake:
             obs = np.append(obs, self.wake_state)
         if self.observe_h_ddot:
-            obs = np.append(obs, self.h_ddot)
+            obs = np.append(obs, self.h_ddot / self.h_ddot_scale)
         if self.observe_previous_lift:
-            obs = np.append(obs, self.fy)
+            obs = np.append(obs, self.fy / self.lift_scale)
         if self.observe_body_circulation:
             body_circulation = -np.sum(self.wake_state) * self.delta_x_wake
             obs = np.append(obs, body_circulation)
@@ -294,11 +296,11 @@ class WagnerEnv(gym.Env):
         return obs.astype(np.float32)
 
     def _get_info(self):
-        return {"previous fy": self.fy,
-                "previous alpha_ddot": self.alpha_ddot,
-                "current alpha_dot": self.kin_state[2],
-                "current alpha_eff": self.kin_state[3],
-                "current h_ddot": self.h_ddot,
+        return {"previous fy": self.fy / self.lift_scale,
+                "previous alpha_ddot": self.alpha_ddot / self.alpha_ddot_scale,
+                "current alpha_dot": self.kin_state[2] / self.alpha_dot_scale,
+                "current alpha_eff": self.kin_state[3] / self.alpha_eff_scale,
+                "current h_ddot": self.h_ddot / self.h_ddot_scale,
                 "current t": self.t,
                 "current time_step": self.time_step}
 
@@ -439,16 +441,16 @@ class WagnerEnv(gym.Env):
 
     def _render_text(self):
         if self.observed_alpha_is_eff:
-            shown_alpha = self.kin_state[3]
+            shown_alpha = self.kin_state[3] / self.alpha_eff_scale
         else:
-            shown_alpha = self.kin_state[1]
+            shown_alpha = self.kin_state[1] / self.alpha_scale
         outfile = StringIO()
         outfile.write("{:5d}{:10.5f}".format(self.time_step, self.t))
         outfile.write((" {:10.3e}" * 4).format(
-            self.kin_state[0],
+            self.kin_state[0] / self.h_dot_scale,
             shown_alpha,
-            self.kin_state[2],
-            self.h_ddot,
+            self.kin_state[2] / self.alpha_dot_scale,
+            self.h_ddot / self.h_ddot_scale,
         ))
         with closing(outfile):
             return outfile.getvalue()
