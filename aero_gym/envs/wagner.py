@@ -6,7 +6,6 @@ from io import StringIO
 from contextlib import closing
 
 #TODO: use observation wrappers (with dicts) instead of observe_wake and observe_h_ddot
-#TODO: check pressure equation
 #TODO: assert xp's are between -c/2 and c/2
 
 def compute_new_wake_element(alpha_eff, gamma_wake, x_wake, delta_x_wake, U=1.0, c=1.0):
@@ -21,15 +20,23 @@ def compute_new_wake_element(alpha_eff, gamma_wake, x_wake, delta_x_wake, U=1.0,
     new_wake_element = np.sqrt(0.5 * delta_x_wake) / (np.sqrt(0.5 * delta_x_wake + c) * delta_x_wake) * (-qscirc - old_wake_influence)
     return new_wake_element
 
-def compute_lift(h_ddot, alpha_dot, alpha_ddot, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=1.0, c=1.0, a=0.0):
+def compute_circulatory_lift(gamma_wake, x_wake, delta_x_wake, rho=1.0, U=1.0, c=1.0):
     """
-    Compute the total lift (added mass + circulatory) (Eldredge2019 equation 8.159).
+    Compute the circulatory lift from discretized wake (Eldredge2019 equation 8.159).
     """
-    # Added mass force
-    fy = 0.25 * rho * c ** 2 * np.pi * (-h_ddot - a * alpha_ddot + U * alpha_dot)
-    # Circulatory force
-    fy += rho * U * delta_x_wake * np.sum(gamma_wake * x_wake / np.sqrt(x_wake ** 2 - 0.25 * c ** 2))
-    return fy
+    return rho * U * delta_x_wake * np.sum(gamma_wake * x_wake / np.sqrt(x_wake ** 2 - 0.25 * c ** 2))
+
+def compute_jones_circulatory_lift(theo_C, theo_D, alpha_eff, jones_states):
+    """
+    Compute the circulatory lift from the Jones approximation states and alpha_eff.
+    """
+    return (2 * np.pi * np.dot(theo_D, [alpha_eff]) + np.dot(theo_C, jones_states))[0]
+
+def compute_added_mass_lift(h_ddot, alpha_dot, alpha_ddot, rho=1.0, U=1.0, c=1.0, a=0.0):
+    """
+    Compute the added mass lift from kinematic states (Eldredge2019 equation 8.159).
+    """
+    return 0.25 * rho * c ** 2 * np.pi * (-h_ddot - a * alpha_ddot + U * alpha_dot)
 
 def compute_wake_pressure_diff(xp, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=1.0, c=1.0):
     """
@@ -37,13 +44,6 @@ def compute_wake_pressure_diff(xp, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=
     """
     p = -rho * U * delta_x_wake / np.pi * np.sum(gamma_wake * (x_wake + xp) / (np.sqrt(x_wake ** 2 - 0.25 * c ** 2) * np.sqrt(0.25 * c ** 2 - xp ** 2)))
     return p
-
-def compute_alpha_eff(h_dot, alpha, alpha_dot, U=1.0, c=1.0, a=1.0):
-    """
-    Compute the effective angle of attack from the angle of attack, angular velocity, and vertical velocity.
-    """
-    alpha_eff = -h_dot / U + alpha + (0.25 * c - a) * alpha_dot / U
-    return alpha_eff
 
 class WagnerEnv(gym.Env):
     """
@@ -131,6 +131,7 @@ class WagnerEnv(gym.Env):
                  U=1.0,
                  c=1,
                  a=0,
+                 use_jones_approx=False,
                  reward_type=1,
                  observed_alpha_is_eff=False,
                  observe_wake=False,
@@ -155,6 +156,7 @@ class WagnerEnv(gym.Env):
         self.U = U
         self.c = c
         self.a = a
+        self.use_jones_approx = use_jones_approx
         self.reward_type = reward_type
 
         self.h_ddot_scale = h_ddot_scale
@@ -172,11 +174,14 @@ class WagnerEnv(gym.Env):
         self.observe_body_circulation = observe_body_circulation
         self.observe_pressure = observe_pressure
         self.pressure_sensor_positions = np.array(pressure_sensor_positions)
-
-        self.t_wake_max = t_max # The maximum amount of time that a wake element is saved in the state vector since its release
-        self.N_wake = int(self.t_wake_max / self.delta_t) # The number of wake elements that are kept in the state vector
-        self.x_wake = np.array([(i + 0.5) * U * delta_t + 0.5 * c for i in range(self.N_wake)])
-        self.delta_x_wake = U * delta_t
+        
+        if self.use_jones_approx:
+            self.N_wake_states = 2
+        else:
+            self.t_wake_max = t_max # The maximum amount of time that a wake element is saved in the state vector since its release
+            self.N_wake_states = int(self.t_wake_max / self.delta_t) # The number of wake elements that are kept in the state vector
+            self.x_wake = np.array([(i + 0.5) * U * delta_t + 0.5 * c for i in range(self.N_wake_states)])
+            self.delta_x_wake = U * delta_t
 
         # The observations don't include the vertical velocity
         # The first element is either the effective AOA or the actual one
@@ -195,8 +200,8 @@ class WagnerEnv(gym.Env):
         )
 
         if self.observe_wake:
-            obs_low = np.append(obs_low, np.full_like(self.x_wake, -np.inf))
-            obs_high = np.append(obs_high, np.full_like(self.x_wake, np.inf))
+            obs_low = np.append(obs_low, np.full(self.N_wake_states, -np.inf))
+            obs_high = np.append(obs_high, np.full(self.N_wake_states, np.inf))
         if self.observe_h_ddot:
             obs_low = np.append(obs_low, -self.h_ddot_scale)
             obs_high = np.append(obs_high, self.h_ddot_scale)
@@ -222,25 +227,39 @@ class WagnerEnv(gym.Env):
 
         # Create the discrete system to advance non-wake states
         A = np.array([
-            [0, 0, 0],
-            [0, 0, 1],
-            [0, 0, 0],
+            [0, 0, 0, 0], # h_dot
+            [0, 0, 1, 0], # alpha
+            [0, 0, 0, 0], # alpha_dot
+            [0, 0, 1, 0], # alpha_eff
         ])
         B = np.array([
             [1, 0],
             [0, 0],
             [0, 1],
+            [-1/U, (c/4-a)/U],
         ])
         C = np.array([
-            [0, 0, 0],
+            [0, 0, 0, 0],
         ])
         D = np.array([
             [0, 0],
         ])
-        sys = signal.StateSpace(A, B, C, D)
-        sys = sys.to_discrete(delta_t)
-        self.A = sys.A
-        self.B = sys.B
+        kin_sys = signal.StateSpace(A, B, C, D)
+        kin_sys = kin_sys.to_discrete(delta_t)
+        self.kin_A = kin_sys.A
+        self.kin_B = kin_sys.B
+
+        # Create the discrete system to advance the Jones states
+        theo_A = np.array([[-0.691, -0.0546], [1, 0]])
+        theo_B = np.array([[1], [0]])
+        theo_C = np.array([[0.2161, 0.0273]])
+        theo_D = np.array([[0.5]])
+        theo_sys = signal.StateSpace(theo_A, theo_B, theo_C, theo_D)
+        theo_sys = theo_sys.to_discrete(delta_t)
+        self.theo_A = theo_sys.A
+        self.theo_B = theo_sys.B
+        self.theo_C = theo_sys.C
+        self.theo_D = theo_sys.D
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -257,10 +276,9 @@ class WagnerEnv(gym.Env):
 
     def _get_obs(self):
         if self.observed_alpha_is_eff:
-            alpha_eff = compute_alpha_eff(self.kin_state[0], self.kin_state[1], self.kin_state[2], U=self.U, c=self.c, a=self.a)
-            obs = np.array([alpha_eff, self.kin_state[2]])
+            obs = np.array([self.kin_state[3], self.kin_state[2]])
         else:
-            obs = self.kin_state[1:]
+            obs = self.kin_state[1:3]
         if self.observe_wake:
             obs = np.append(obs, self.wake_state)
         if self.observe_h_ddot:
@@ -276,11 +294,10 @@ class WagnerEnv(gym.Env):
         return obs.astype(np.float32)
 
     def _get_info(self):
-        alpha_eff = compute_alpha_eff(self.kin_state[0], self.kin_state[1], self.kin_state[2], U=self.U, c=self.c, a=self.a)
         return {"previous fy": self.fy,
                 "previous alpha_ddot": self.alpha_ddot,
                 "current alpha_dot": self.kin_state[2],
-                "current alpha_eff": alpha_eff,
+                "current alpha_eff": self.kin_state[3],
                 "current h_ddot": self.h_ddot,
                 "current t": self.t,
                 "current time_step": self.time_step}
@@ -310,9 +327,9 @@ class WagnerEnv(gym.Env):
             self.h_ddot_list = np.zeros(int(self.t_max / self.delta_t))
             print("No h_ddot provided, using zeros instead")
 
-        self.h_ddot = self.h_ddot_list[self.time_step]
-        self.kin_state = np.zeros(len(self.A))
-        self.wake_state = np.zeros(self.N_wake)
+        self.h_ddot = self.h_ddot_list[self.time_step] * self.h_ddot_scale
+        self.kin_state = np.zeros(len(self.kin_A))
+        self.wake_state = np.zeros(self.N_wake_states)
         self.fy = 0.0
         self.alpha_ddot = 0.0
 
@@ -334,17 +351,30 @@ class WagnerEnv(gym.Env):
             self.alpha_ddot = self.discrete_action_values[action] 
 
         # Compute the lift and reward
-        self.fy = compute_lift(
-                self.h_ddot,
-                self.kin_state[2],
-                self.alpha_ddot,
+        if self.use_jones_approx:
+            CL = compute_jones_circulatory_lift(
+                self.theo_C,
+                self.theo_D,
+                self.kin_state[3],
+                self.wake_state)
+            self.fy = 0.5 * CL * (self.U ** 2) * self.c * self.rho
+        else:
+            self.fy = compute_circulatory_lift(
                 self.wake_state,
                 self.x_wake,
                 self.delta_x_wake,
                 rho=self.rho,
                 U=self.U,
-                c=self.c,
-                a=self.a)
+                c=self.c)
+
+        self.fy += compute_added_mass_lift(
+            self.h_ddot,
+            self.kin_state[2],
+            self.alpha_ddot,
+            rho=self.rho,
+            U=self.U,
+            c=self.c,
+            a=self.a)
 
         # Compute the reward
         #reward = 1 - (self.fy / self.lift_scale) ** 2
@@ -363,27 +393,30 @@ class WagnerEnv(gym.Env):
         self.t += self.delta_t
         self.time_step += 1
 
+        # Update wake states (before updating kinematic states)
+        if self.use_jones_approx:
+            u = np.array([2 * np.pi * self.kin_state[3]])
+            self.wake_state = np.matmul(self.theo_A, self.wake_state) + np.dot(self.theo_B, u)
+        else:
+            self.wake_state[1:] = self.wake_state[:-1]
+            self.wake_state[0] = compute_new_wake_element(
+                    self.kin_state[3],
+                    self.wake_state,
+                    self.x_wake,
+                    self.delta_x_wake,
+                    U=self.U,
+                    c=self.c
+            )
+
         # Update kinematic states
         u = np.array([self.h_ddot, self.alpha_ddot])
-        self.kin_state = np.matmul(self.A, self.kin_state) + np.dot(self.B, u)
-
-        # Update wake states
-        alpha_eff = compute_alpha_eff(self.kin_state[0], self.kin_state[1], self.kin_state[2], U=self.U, c=self.c, a=self.a)
-        self.wake_state[1:] = self.wake_state[:-1]
-        self.wake_state[0] = compute_new_wake_element(
-                alpha_eff,
-                self.wake_state,
-                self.x_wake,
-                self.delta_x_wake,
-                U=self.U,
-                c=self.c
-        )
+        self.kin_state = np.matmul(self.kin_A, self.kin_state) + np.dot(self.kin_B, u)
 
         # Check if timelimit is reached
         if self.t > self.t_max or np.isclose(self.t, self.t_max, rtol=1e-9):
             self.truncated = True
         else:
-            self.h_ddot = self.h_ddot_list[self.time_step]
+            self.h_ddot = self.h_ddot_list[self.time_step] * self.h_ddot_scale
 
         # Check if lift goes out of bounds
         if self.lift_termination and (self.fy < -self.lift_scale or self.fy > self.lift_scale):
@@ -404,7 +437,7 @@ class WagnerEnv(gym.Env):
 
     def _render_text(self):
         if self.observed_alpha_is_eff:
-            shown_alpha = compute_alpha_eff(self.kin_state[0], self.kin_state[1], self.kin_state[2], U=self.U, c=self.c, a=self.a)
+            shown_alpha = self.kin_state[3]
         else:
             shown_alpha = self.kin_state[1]
         outfile = StringIO()
