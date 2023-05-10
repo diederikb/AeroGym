@@ -312,6 +312,18 @@ class WagnerEnv(gym.Env):
         else:
             self.alpha_ddot = self.discrete_action_values[action] 
 
+        # Update wake states
+        alpha_eff = compute_alpha_eff(self.kin_state[0], self.kin_state[1], self.kin_state[2], U=self.U, c=self.c, a=self.a)
+        self.gamma_wake[1:] = self.gamma_wake[:-1]
+        self.gamma_wake[0] = compute_new_wake_element(
+                alpha_eff,
+                self.gamma_wake,
+                self.x_wake,
+                self.delta_x_wake,
+                U=self.U,
+                c=self.c
+        )
+
         # Compute the lift and reward
         self.fy = compute_lift(
                 self.h_ddot,
@@ -345,18 +357,6 @@ class WagnerEnv(gym.Env):
         # Update kinematic states
         u = np.array([self.h_ddot, self.alpha_ddot])
         self.kin_state = np.matmul(self.A, self.kin_state) + np.dot(self.B, u)
-
-        # Update wake states
-        alpha_eff = compute_alpha_eff(self.kin_state[0], self.kin_state[1], self.kin_state[2], U=self.U, c=self.c, a=self.a)
-        self.gamma_wake[1:] = self.gamma_wake[:-1]
-        self.gamma_wake[0] = compute_new_wake_element(
-                alpha_eff,
-                self.gamma_wake,
-                self.x_wake,
-                self.delta_x_wake,
-                U=self.U,
-                c=self.c
-        )
 
         # Check if timelimit is reached
         if self.t > self.t_max or np.isclose(self.t, self.t_max, rtol=1e-9):
