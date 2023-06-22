@@ -48,11 +48,21 @@ def compute_wake_pressure_diff(xp, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=
 
 class WagnerEnv(gym.Env):
     """
+    ## Description
+
+    The Wagner environment is the aerodynamic model for a flat plate undergoing arbitrary motions in the context of classical unsteady aerodynamics, or, the Wagner problem (Wagner, 1925). The flat plate undergoes prescribed or random vertical accelerations and the goal is to minimize the lift variations by controlling the AOA through the angular acceleration of the plate.
+
+    This environment provides two approaches to the user:
+    1. Solution through the Wagner approximation of R.T. Jones
+    2. Solution through the discretization of the wake
+
+    TODO
+
     ## Action space
 
     The action represents the angular acceleration (alpha_ddot) applied at a distance `a` from the midchord position.
 
-    The action space depends on the values of the arguments `continuous_actions`, `num_discrete_actions`, `alpha_ddot_scale`.
+    The action space depends on the values of the arguments `continuous_actions`, `num_discrete_actions`, and `alpha_ddot_scale`.
 
     If `continuous_actions` is `False` and N = `num_discrete_actions`:
 
@@ -116,6 +126,24 @@ class WagnerEnv(gym.Env):
     |   .   |                                     .                                       |   .    |   .    |    .    |
     |   .   |                                     .                                       |   .    |   .    |    .    |
     |  N-1  | pressure at the last pressure sensor position at the current timestep       | -Inf   |  Inf   | M/LT^2  |
+
+    ## Rewards
+
+    TODO
+
+    ## Starting State
+
+    The episode time, kinematic and wake states, and previous lift are all initialized to zero. The vertical acceleration is initialized to its first value.
+
+    ## Episode End
+
+    The episode ends if one of the following occurs:
+    1. Termination: Absolute value of the lift is greater than `lift_scale`
+    2. Truncation: Episode time `t` is greater than or equal to `t_max`
+
+    ## Arguments
+
+    TODO
 
     """
     metadata = {"render_modes": ["ansi"], "render_fps": 4}
