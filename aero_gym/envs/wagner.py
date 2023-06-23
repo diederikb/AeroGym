@@ -44,7 +44,6 @@ def compute_wake_pressure_diff(xp, alpha_eff, gamma_wake, x_wake, delta_x_wake, 
     Compute the pressure difference between the upper and lower surface (pu-pl) at `xp` due to the wake.
     """
     p = np.sqrt((c/2 - xp) / (c/2 + xp)) * (-2 * rho * U ** 2 * alpha_eff + rho * U / np.pi * delta_x_wake * np.sum(gamma_wake / (np.sqrt(x_wake ** 2 - 0.25 * c ** 2))))
-    # p = -rho * U * delta_x_wake / np.pi * np.sum(gamma_wake * (x_wake + xp) / (np.sqrt(x_wake ** 2 - 0.25 * c ** 2) * np.sqrt(0.25 * c ** 2 - xp ** 2)))
     return p
 
 class WagnerEnv(gym.Env):
@@ -79,6 +78,8 @@ class WagnerEnv(gym.Env):
 
     ## Observation Space
 
+    TODO: explain scaling
+
     The default observation space is an `ndarray` with shape `(2,)` where the elements correspond to the following:
     The observed angle of attack is by default the angle of the wing with U but can be changed to the effective one by setting `observed_alpha_is_eff`.
 
@@ -111,12 +112,6 @@ class WagnerEnv(gym.Env):
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
     |   0   | lift at the previous timestep (per unit depth)                              |see args|see args| M/T^2   |
-
-    `observe_body_circulation`
-
-    | Index | Observation                                                                 | Min    | Max    | Unit    |
-    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | circulation about the flat plate at the current timestep                    |see args|see args| L^2/T   |
 
     `observe_pressure` (N = length of `pressure_sensor_positions`)
     
@@ -167,7 +162,6 @@ class WagnerEnv(gym.Env):
                  observe_wake=False,
                  observe_h_ddot=False,
                  observe_previous_lift=False,
-                 observe_body_circulation=False,
                  observe_pressure=False,
                  pressure_sensor_positions=[],
                  lift_termination=False,
@@ -197,12 +191,12 @@ class WagnerEnv(gym.Env):
         self.alpha_ddot_scale = alpha_ddot_scale
         self.lift_scale = lift_scale
         self.lift_termination = lift_termination
+        self.pressure_scale = lift_scale / c
 
         self.observed_alpha_is_eff = observed_alpha_is_eff
         self.observe_wake = observe_wake
         self.observe_h_ddot = observe_h_ddot
         self.observe_previous_lift = observe_previous_lift
-        self.observe_body_circulation = observe_body_circulation
         self.observe_pressure = observe_pressure
         self.pressure_sensor_positions = np.array(pressure_sensor_positions)
         
@@ -239,9 +233,6 @@ class WagnerEnv(gym.Env):
         if self.observe_previous_lift:
             obs_low = np.append(obs_low, -np.inf)
             obs_high = np.append(obs_high, np.inf)
-        if self.observe_body_circulation:
-            obs_low = np.append(obs_low, -np.inf)
-            obs_high = np. append(obs_high, np.inf)
         if self.observe_pressure:
             obs_low = np.append(obs_low, np.full_like(self.pressure_sensor_positions, -np.inf))
             obs_high = np.append(obs_high, np.full_like(self.pressure_sensor_positions, np.inf))
@@ -316,11 +307,8 @@ class WagnerEnv(gym.Env):
             obs = np.append(obs, self.h_ddot / self.h_ddot_scale)
         if self.observe_previous_lift:
             obs = np.append(obs, self.fy / self.lift_scale)
-        if self.observe_body_circulation:
-            body_circulation = -np.sum(self.wake_state) * self.delta_x_wake
-            obs = np.append(obs, body_circulation)
         if self.observe_pressure:
-            pressure_measurements = [compute_wake_pressure_diff(xp, self.kin_state[3] / self.alpha_eff_scale, self.wake_state, self.x_wake, self.delta_x_wake, rho=self.rho, U=self.U, c=self.c) for xp in self.pressure_sensor_positions]
+            pressure_measurements = [compute_wake_pressure_diff(xp, self.kin_state[3] / self.alpha_eff_scale, self.wake_state, self.x_wake, self.delta_x_wake, rho=self.rho, U=self.U, c=self.c) / self.pressure_scale for xp in self.pressure_sensor_positions]
             obs = np.append(obs, pressure_measurements)
         return obs.astype(np.float32)
 
