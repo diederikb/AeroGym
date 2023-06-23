@@ -39,11 +39,12 @@ def compute_added_mass_lift(h_ddot, alpha_dot, alpha_ddot, rho=1.0, U=1.0, c=1.0
     """
     return 0.25 * rho * c ** 2 * np.pi * (-h_ddot - a * alpha_ddot + U * alpha_dot)
 
-def compute_wake_pressure_diff(xp, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=1.0, c=1.0):
+def compute_wake_pressure_diff(xp, alpha_eff, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=1.0, c=1.0):
     """
-    Compute the pressure difference between the upper and lower surface (pu-pl) at x due to the wake.
+    Compute the pressure difference between the upper and lower surface (pu-pl) at `xp` due to the wake.
     """
-    p = -rho * U * delta_x_wake / np.pi * np.sum(gamma_wake * (x_wake + xp) / (np.sqrt(x_wake ** 2 - 0.25 * c ** 2) * np.sqrt(0.25 * c ** 2 - xp ** 2)))
+    p = np.sqrt((c/2 - xp) / (c/2 + xp)) * (-2 * rho * U ** 2 * alpha_eff + rho * U / np.pi * delta_x_wake * np.sum(gamma_wake / (np.sqrt(x_wake ** 2 - 0.25 * c ** 2))))
+    # p = -rho * U * delta_x_wake / np.pi * np.sum(gamma_wake * (x_wake + xp) / (np.sqrt(x_wake ** 2 - 0.25 * c ** 2) * np.sqrt(0.25 * c ** 2 - xp ** 2)))
     return p
 
 class WagnerEnv(gym.Env):
@@ -319,7 +320,7 @@ class WagnerEnv(gym.Env):
             body_circulation = -np.sum(self.wake_state) * self.delta_x_wake
             obs = np.append(obs, body_circulation)
         if self.observe_pressure:
-            pressure_measurements = [compute_wake_pressure_diff(xp, self.wake_state, self.x_wake, self.delta_x_wake, rho=self.rho, U=self.U, c=self.c) for xp in self.pressure_sensor_positions]
+            pressure_measurements = [compute_wake_pressure_diff(xp, self.kin_state[3] / self.alpha_eff_scale, self.wake_state, self.x_wake, self.delta_x_wake, rho=self.rho, U=self.U, c=self.c) for xp in self.pressure_sensor_positions]
             obs = np.append(obs, pressure_measurements)
         return obs.astype(np.float32)
 
