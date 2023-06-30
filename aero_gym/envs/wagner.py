@@ -39,12 +39,19 @@ def compute_added_mass_lift(h_ddot, alpha_dot, alpha_ddot, rho=1.0, U=1.0, c=1.0
     """
     return 0.25 * rho * c ** 2 * np.pi * (-h_ddot - a * alpha_ddot + U * alpha_dot)
 
-def compute_wake_pressure_diff(xp, alpha_eff, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=1.0, c=1.0):
+def compute_circulatory_pressure_diff(xp, alpha_eff, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=1.0, c=1.0):
     """
-    Compute the pressure difference between the upper and lower surface (pu-pl) at `xp` due to the wake.
+    Compute the circulatory pressure difference between the upper and lower surface (pu-pl) at `xp`.
     """
     p = np.sqrt((c/2 - xp) / (c/2 + xp)) * (-2 * rho * U ** 2 * alpha_eff + rho * U / np.pi * delta_x_wake * np.sum(gamma_wake / (np.sqrt(x_wake ** 2 - 0.25 * c ** 2))))
     return p
+
+def compute_added_mass_pressure_diff(xp, h_ddot, alpha_dot, alpha_ddot, rho=1.0, U=1.0, c=1.0, a=0.0):
+    """
+    Compute the added mass pressure difference between the upper and lower surface (pu-pl) at `xp`.
+    """
+    return -2 * rho * (h_ddot + a * alpha_ddot - U * alpha_dot) * np.sqrt(0.25 * c ** 2 - xp ** 2)
+
 
 class WagnerEnv(gym.Env):
     """
@@ -158,11 +165,14 @@ class WagnerEnv(gym.Env):
                  a=0,
                  use_jones_approx=False,
                  reward_type=1,
-                 observed_alpha_is_eff=False,
+                 observe_alpha_eff=False,
+                 observe_previous_alpha_eff=False,
                  observe_wake=False,
+                 observe_previous_wake=False,
                  observe_h_ddot=False,
                  observe_previous_lift=False,
-                 observe_pressure=False,
+                 observe_previous_circulatory_pressure=False,
+                 observe_previous_pressure=False,
                  pressure_sensor_positions=[],
                  lift_termination=False,
                  lift_scale=0.1,
@@ -193,11 +203,14 @@ class WagnerEnv(gym.Env):
         self.lift_termination = lift_termination
         self.pressure_scale = lift_scale / c
 
-        self.observed_alpha_is_eff = observed_alpha_is_eff
+        self.observe_alpha_eff = observe_alpha_eff
+        self.observe_previous_alpha_eff = observe_previous_alpha_eff
         self.observe_wake = observe_wake
+        self.observe_previous_wake = observe_previous_wake
         self.observe_h_ddot = observe_h_ddot
         self.observe_previous_lift = observe_previous_lift
-        self.observe_pressure = observe_pressure
+        self.observe_previous_circulatory_pressure = observe_previous_circulatory_pressure
+        self.observe_previous_pressure = observe_previous_pressure
         self.pressure_sensor_positions = np.array(pressure_sensor_positions)
         
         if self.use_jones_approx:
@@ -212,19 +225,28 @@ class WagnerEnv(gym.Env):
         # The first element is either the effective AOA or the actual one
         obs_low = np.array(
             [
-                -np.inf, # effective AOA
+                -np.inf, # AOA
                 -np.inf, # angular velocity of the wing
             ]
         )
 
         obs_high = np.array(
             [
-                np.inf, # effective AOA
+                np.inf, # AOA
                 np.inf, # angular velocity of the wing
             ]
         )
 
+        if self.observe_alpha_eff:
+            obs_low = np.append(obs_low, -np.inf)
+            obs_high = np.append(obs_high, np.inf)
+        if self.observe_previous_alpha_eff:
+            obs_low = np.append(obs_low, -np.inf)
+            obs_high = np.append(obs_high, np.inf)
         if self.observe_wake:
+            obs_low = np.append(obs_low, np.full(self.N_wake_states, -np.inf))
+            obs_high = np.append(obs_high, np.full(self.N_wake_states, np.inf))
+        if self.observe_previous_wake:
             obs_low = np.append(obs_low, np.full(self.N_wake_states, -np.inf))
             obs_high = np.append(obs_high, np.full(self.N_wake_states, np.inf))
         if self.observe_h_ddot:
@@ -233,7 +255,10 @@ class WagnerEnv(gym.Env):
         if self.observe_previous_lift:
             obs_low = np.append(obs_low, -np.inf)
             obs_high = np.append(obs_high, np.inf)
-        if self.observe_pressure:
+        if self.observe_previous_circulatory_pressure:
+            obs_low = np.append(obs_low, np.full_like(self.pressure_sensor_positions, -np.inf))
+            obs_high = np.append(obs_high, np.full_like(self.pressure_sensor_positions, np.inf))
+        if self.observe_previous_pressure:
             obs_low = np.append(obs_low, np.full_like(self.pressure_sensor_positions, -np.inf))
             obs_high = np.append(obs_high, np.full_like(self.pressure_sensor_positions, np.inf))
  
@@ -296,20 +321,27 @@ class WagnerEnv(gym.Env):
         self.window = None
         self.clock = None
 
-    def _get_obs(self):
-        if self.observed_alpha_is_eff:
-            obs = np.array([self.kin_state[3] / self.alpha_eff_scale, self.kin_state[2] / self.alpha_dot_scale])
-        else:
-            obs = np.array([self.kin_state[1] / self.alpha_scale, self.kin_state[2] / self.alpha_dot_scale])
-        if self.observe_wake:
-            obs = np.append(obs, self.wake_state)
+    def _get_obs(self, current_kin_state, previous_kin_state, current_wake_state, previous_wake_state):
+        obs = np.array([current_kin_state[1] / self.alpha_scale, current_kin_state[2] / self.alpha_dot_scale])
+        if self.observe_alpha_eff:
+            obs = np.append(obs, current_kin_state[3] / self.alpha_eff_scale)
+        if self.observe_previous_alpha_eff:
+            obs = np.append(obs, previous_kin_state[3] / self.alpha_eff_scale)
+        if self.observe_wake: # Deprecated
+            obs = np.append(obs, current_wake_state)
+        if self.observe_previous_wake:
+            obs = np.append(obs, previous_wake_state)
         if self.observe_h_ddot:
             obs = np.append(obs, self.h_ddot / self.h_ddot_scale)
         if self.observe_previous_lift:
             obs = np.append(obs, self.fy / self.lift_scale)
-        if self.observe_pressure:
-            pressure_measurements = [compute_wake_pressure_diff(xp, self.kin_state[3] / self.alpha_eff_scale, self.wake_state, self.x_wake, self.delta_x_wake, rho=self.rho, U=self.U, c=self.c) / self.pressure_scale for xp in self.pressure_sensor_positions]
+        if self.observe_previous_circulatory_pressure: # Deprecated
+            pressure_measurements = [compute_circulatory_pressure_diff(xp, previous_kin_state[3] / self.alpha_eff_scale, previous_wake_state, self.x_wake, self.delta_x_wake, rho=self.rho, U=self.U, c=self.c) / self.pressure_scale for xp in self.pressure_sensor_positions]
             obs = np.append(obs, pressure_measurements)
+        if self.observe_previous_pressure:
+            scaled_pressure = [p / self.pressure_scale for p in self.p]
+            obs = np.append(obs, scaled_pressure)
+
         return obs.astype(np.float32)
 
     def _get_info(self):
@@ -350,9 +382,10 @@ class WagnerEnv(gym.Env):
         self.kin_state = np.zeros(len(self.kin_A))
         self.wake_state = np.zeros(self.N_wake_states)
         self.fy = 0.0
+        self.p = np.zeros_like(self.pressure_sensor_positions)
         self.alpha_ddot = 0.0
 
-        observation = self._get_obs()
+        observation = self._get_obs(self.kin_state, self.kin_state, self.wake_state, self.wake_state)
         info = self._get_info()
 
         if self.render_mode == "human":
@@ -394,6 +427,20 @@ class WagnerEnv(gym.Env):
             U=self.U,
             c=self.c,
             a=self.a)
+
+        self.p = [
+            compute_added_mass_pressure_diff(
+                xp,
+                self.h_ddot,
+                self.kin_state[2],
+                self.alpha_ddot,
+                rho=self.rho,
+                U=self.U,
+                c=self.c,
+                a=self.a)
+            - 2 * self.fy / (np.pi * self.c) * np.sqrt((0.5 * self.c + xp) / (0.5 * self.c - xp)) for xp in self.pressure_sensor_positions]
+        previous_kin_state = np.copy(self.kin_state)
+        previous_wake_state = np.copy(self.wake_state)
 
         # Compute the reward
         #reward = 1 - (self.fy / self.lift_scale) ** 2
@@ -444,7 +491,7 @@ class WagnerEnv(gym.Env):
             self.terminated = True
 
         # Create observation for next state
-        observation = self._get_obs()
+        observation = self._get_obs(self.kin_state, previous_kin_state, self.wake_state, previous_wake_state)
         info = self._get_info()
         
         if self.render_mode == "human":
@@ -457,16 +504,13 @@ class WagnerEnv(gym.Env):
             return self._render_text()
 
     def _render_text(self):
-        if self.observed_alpha_is_eff:
-            shown_alpha = self.kin_state[3] / self.alpha_eff_scale
-        else:
-            shown_alpha = self.kin_state[1] / self.alpha_scale
         outfile = StringIO()
         outfile.write("{:5d}{:10.5f}".format(self.time_step, self.t))
-        outfile.write((" {:10.3e}" * 4).format(
+        outfile.write((" {:10.3e}" * 5).format(
             self.kin_state[0] / self.h_dot_scale,
-            shown_alpha,
+            self.kin_state[1] / self.alpha_scale,
             self.kin_state[2] / self.alpha_dot_scale,
+            self.kin_state[3] / self.alpha_eff_scale,
             self.h_ddot / self.h_ddot_scale,
         ))
         with closing(outfile):
