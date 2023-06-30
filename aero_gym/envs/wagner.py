@@ -464,15 +464,7 @@ class WagnerEnv(gym.Env):
                 self.wake_state)
             self.fy = 0.5 * CL * (self.U ** 2) * self.c * self.rho
 
-        self.fy += compute_added_mass_lift(
-            self.h_ddot,
-            self.kin_state[2],
-            self.alpha_ddot,
-            rho=self.rho,
-            U=self.U,
-            c=self.c,
-            a=self.a)
-
+        # Compute the pressure using the circulatory lift
         self.p = [
             compute_added_mass_pressure_diff(
                 xp,
@@ -484,6 +476,16 @@ class WagnerEnv(gym.Env):
                 c=self.c,
                 a=self.a)
             - 2 * self.fy / (np.pi * self.c) * np.sqrt((0.5 * self.c + xp) / (0.5 * self.c - xp)) for xp in self.pressure_sensor_positions]
+
+        self.fy += compute_added_mass_lift(
+            self.h_ddot,
+            self.kin_state[2],
+            self.alpha_ddot,
+            rho=self.rho,
+            U=self.U,
+            c=self.c,
+            a=self.a)
+
         previous_kin_state = np.copy(self.kin_state)
         previous_wake_state = np.copy(self.wake_state)
 
