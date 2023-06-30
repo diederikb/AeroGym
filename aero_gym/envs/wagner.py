@@ -5,7 +5,6 @@ from scipy import signal
 from io import StringIO
 from contextlib import closing
 
-#TODO: use observation wrappers (with dicts) instead of observe_wake and observe_h_ddot
 #TODO: assert xp's are between -c/2 and c/2
 #TODO: check scalings for alpha_dot, h_dot, alpha, and alpha_eff
 
@@ -41,7 +40,7 @@ def compute_added_mass_lift(h_ddot, alpha_dot, alpha_ddot, rho=1.0, U=1.0, c=1.0
 
 def compute_circulatory_pressure_diff(xp, alpha_eff, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=1.0, c=1.0):
     """
-    Compute the circulatory pressure difference between the upper and lower surface (pu-pl) at `xp`.
+    Compute the circulatory pressure difference between the upper and lower surface (pu-pl) at `xp` from the wake state.
     """
     p = np.sqrt((c/2 - xp) / (c/2 + xp)) * (-2 * rho * U ** 2 * alpha_eff + rho * U / np.pi * delta_x_wake * np.sum(gamma_wake / (np.sqrt(x_wake ** 2 - 0.25 * c ** 2))))
     return p
@@ -88,16 +87,27 @@ class WagnerEnv(gym.Env):
     TODO: explain scaling
 
     The default observation space is an `ndarray` with shape `(2,)` where the elements correspond to the following:
-    The observed angle of attack is by default the angle of the wing with U but can be changed to the effective one by setting `observed_alpha_is_eff`.
 
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | (effective) angle of attack at the current timestep                         |see args|see args| rad     |
+    |   0   | angle of attack at the current timestep                                     | -Inf   |  Inf   | rad     |
     |   1   | angular velocity of the wing at the current timestep                        | -Inf   |  Inf   | rad/T   |
 
     Setting the following keyword arguments to `True` will append the observation space with the following arrays (in the order that is given here):
 
-    `observe_wake` (N = `t_max` / `delta_t`)
+    `observe_alpha_eff`
+
+    | Index | Observation                                                                 | Min    | Max    | Unit    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | effective angle of attack at the current timestep                           | -Inf   |  Inf   | rad     |
+
+    `observe_previous_alpha_eff`
+
+    | Index | Observation                                                                 | Min    | Max    | Unit    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | effective angle of attack at the previous timestep                          | -Inf   |  Inf   | rad     |
+
+    `observe_wake` (N = `t_max` / `delta_t`) (with `use_jones_approx = False`)
 
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
@@ -107,6 +117,31 @@ class WagnerEnv(gym.Env):
     |   .   |                                     .                                       |   .    |   .    |  .      |
     |   .   |                                     .                                       |   .    |   .    |  .      |
     |  N-1  | vortex sheet strength of the wake element released at t - `t_max`           | -Inf   |  Inf   | L/T     |
+
+    `observe_wake` (N = `t_max` / `delta_t`) (with `use_jones_approx = True`)
+
+    | Index | Observation                                                                                    | Min    | Max    | Unit    |
+    |-------|------------------------------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | value of the first state of the R.T. Jones state-space representation at the current timestep  | -Inf   |  Inf   |  -      |
+    |   1   | value of the second state of the R.T. Jones state-space representation at the current timestep | -Inf   |  Inf   |  -      |
+
+    `observe_previous_wake` (N = `t_max` / `delta_t`) (with `use_jones_approx = False`)
+
+    | Index | Observation                                                                   | Min    | Max    | Unit    |
+    |-------|-------------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | vortex sheet strength of the wake element released at the previous timestep   | -Inf   |  Inf   | L/T     |
+    |   1   | vortex sheet strength of the wake element released two timesteps earlier      | -Inf   |  Inf   | L/T     |
+    |   .   |                                     .                                         |   .    |   .    |  .      |
+    |   .   |                                     .                                         |   .    |   .    |  .      |
+    |   .   |                                     .                                         |   .    |   .    |  .      |
+    |  N-1  | vortex sheet strength of the wake element released at t - `t_max` - `delta_t` | -Inf   |  Inf   | L/T     |
+
+    `observe_previous_wake` (N = `t_max` / `delta_t`) (with `use_jones_approx = True`)
+
+    | Index | Observation                                                                                     | Min    | Max    | Unit    |
+    |-------|-------------------------------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | value of the first state of the R.T. Jones state-space representation at the previous timestep  | -Inf   |  Inf   |  -      |
+    |   1   | value of the second state of the R.T. Jones state-space representation at the previous timestep | -Inf   |  Inf   |  -      |
 
     `observe_h_ddot`
 
@@ -120,15 +155,25 @@ class WagnerEnv(gym.Env):
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
     |   0   | lift at the previous timestep (per unit depth)                              |see args|see args| M/T^2   |
 
-    `observe_pressure` (N = length of `pressure_sensor_positions`)
+    `observe_previous_circulatory_pressure` (N = length of `pressure_sensor_positions`)
+    
+    | Index | Observation                                                                         | Min    | Max    | Unit    |
+    |-------|-------------------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | circulatory pressure at the first pressure sensor position at the previous timestep | -Inf   |  Inf   | M/LT^2  |
+    |   .   |                                     .                                               |   .    |   .    |    .    |
+    |   .   |                                     .                                               |   .    |   .    |    .    |
+    |   .   |                                     .                                               |   .    |   .    |    .    |
+    |  N-1  | circulatory pressure at the last pressure sensor position at the previous timestep  | -Inf   |  Inf   | M/LT^2  |
+
+    `observe_previous_pressure` (N = length of `pressure_sensor_positions`)
     
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | pressure at the first pressure sensor position at the current timestep      | -Inf   |  Inf   | M/LT^2  |
+    |   0   | pressure at the first pressure sensor position at the previous timestep     | -Inf   |  Inf   | M/LT^2  |
     |   .   |                                     .                                       |   .    |   .    |    .    |
     |   .   |                                     .                                       |   .    |   .    |    .    |
     |   .   |                                     .                                       |   .    |   .    |    .    |
-    |  N-1  | pressure at the last pressure sensor position at the current timestep       | -Inf   |  Inf   | M/LT^2  |
+    |  N-1  | pressure at the last pressure sensor position at the previous timestep      | -Inf   |  Inf   | M/LT^2  |
 
     ## Rewards
 
@@ -163,7 +208,7 @@ class WagnerEnv(gym.Env):
                  U=1.0,
                  c=1,
                  a=0,
-                 use_jones_approx=False,
+                 use_jones_approx=True,
                  reward_type=1,
                  observe_alpha_eff=False,
                  observe_previous_alpha_eff=False,
@@ -327,7 +372,7 @@ class WagnerEnv(gym.Env):
             obs = np.append(obs, current_kin_state[3] / self.alpha_eff_scale)
         if self.observe_previous_alpha_eff:
             obs = np.append(obs, previous_kin_state[3] / self.alpha_eff_scale)
-        if self.observe_wake: # Deprecated
+        if self.observe_wake:
             obs = np.append(obs, current_wake_state)
         if self.observe_previous_wake:
             obs = np.append(obs, previous_wake_state)
@@ -335,7 +380,7 @@ class WagnerEnv(gym.Env):
             obs = np.append(obs, self.h_ddot / self.h_ddot_scale)
         if self.observe_previous_lift:
             obs = np.append(obs, self.fy / self.lift_scale)
-        if self.observe_previous_circulatory_pressure: # Deprecated
+        if self.observe_previous_circulatory_pressure:
             pressure_measurements = [compute_circulatory_pressure_diff(xp, previous_kin_state[3] / self.alpha_eff_scale, previous_wake_state, self.x_wake, self.delta_x_wake, rho=self.rho, U=self.U, c=self.c) / self.pressure_scale for xp in self.pressure_sensor_positions]
             obs = np.append(obs, pressure_measurements)
         if self.observe_previous_pressure:
