@@ -107,7 +107,14 @@ class WagnerEnv(gym.Env):
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
     |   0   | effective angle of attack at the previous timestep                          | -Inf   |  Inf   | rad     |
 
-    `observe_wake` (N = `t_max` / `delta_t`) (with `use_jones_approx = False`)
+    `observe_wake` (N = `t_max` / `delta_t`) (with `use_discretized_wake = False`)
+
+    | Index | Observation                                                                                    | Min    | Max    | Unit    |
+    |-------|------------------------------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | value of the first state of the R.T. Jones state-space representation at the current timestep  | -Inf   |  Inf   |  -      |
+    |   1   | value of the second state of the R.T. Jones state-space representation at the current timestep | -Inf   |  Inf   |  -      |
+
+    `observe_wake` (N = `t_max` / `delta_t`) (with `use_discretized_wake = True`)
 
     | Index | Observation                                                                 | Min    | Max    | Unit    |
     |-------|-----------------------------------------------------------------------------|--------|--------|---------|
@@ -118,14 +125,14 @@ class WagnerEnv(gym.Env):
     |   .   |                                     .                                       |   .    |   .    |  .      |
     |  N-1  | vortex sheet strength of the wake element released at t - `t_max`           | -Inf   |  Inf   | L/T     |
 
-    `observe_wake` (N = `t_max` / `delta_t`) (with `use_jones_approx = True`)
+    `observe_previous_wake` (N = `t_max` / `delta_t`) (with `use_discretized_wake = False`)
 
-    | Index | Observation                                                                                    | Min    | Max    | Unit    |
-    |-------|------------------------------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | value of the first state of the R.T. Jones state-space representation at the current timestep  | -Inf   |  Inf   |  -      |
-    |   1   | value of the second state of the R.T. Jones state-space representation at the current timestep | -Inf   |  Inf   |  -      |
+    | Index | Observation                                                                                     | Min    | Max    | Unit    |
+    |-------|-------------------------------------------------------------------------------------------------|--------|--------|---------|
+    |   0   | value of the first state of the R.T. Jones state-space representation at the previous timestep  | -Inf   |  Inf   |  -      |
+    |   1   | value of the second state of the R.T. Jones state-space representation at the previous timestep | -Inf   |  Inf   |  -      |
 
-    `observe_previous_wake` (N = `t_max` / `delta_t`) (with `use_jones_approx = False`)
+    `observe_previous_wake` (N = `t_max` / `delta_t`) (with `use_discretized_wake = True`)
 
     | Index | Observation                                                                   | Min    | Max    | Unit    |
     |-------|-------------------------------------------------------------------------------|--------|--------|---------|
@@ -135,13 +142,6 @@ class WagnerEnv(gym.Env):
     |   .   |                                     .                                         |   .    |   .    |  .      |
     |   .   |                                     .                                         |   .    |   .    |  .      |
     |  N-1  | vortex sheet strength of the wake element released at t - `t_max` - `delta_t` | -Inf   |  Inf   | L/T     |
-
-    `observe_previous_wake` (N = `t_max` / `delta_t`) (with `use_jones_approx = True`)
-
-    | Index | Observation                                                                                     | Min    | Max    | Unit    |
-    |-------|-------------------------------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | value of the first state of the R.T. Jones state-space representation at the previous timestep  | -Inf   |  Inf   |  -      |
-    |   1   | value of the second state of the R.T. Jones state-space representation at the previous timestep | -Inf   |  Inf   |  -      |
 
     `observe_h_ddot`
 
@@ -208,7 +208,7 @@ class WagnerEnv(gym.Env):
                  U=1.0,
                  c=1,
                  a=0,
-                 use_jones_approx=True,
+                 use_discretized_wake=False,
                  reward_type=1,
                  observe_alpha_eff=False,
                  observe_previous_alpha_eff=False,
@@ -235,7 +235,7 @@ class WagnerEnv(gym.Env):
         self.U = U
         self.c = c
         self.a = a
-        self.use_jones_approx = use_jones_approx
+        self.use_discretized_wake = use_discretized_wake
         self.reward_type = reward_type
 
         self.h_dot_scale = lift_scale * U
@@ -258,13 +258,13 @@ class WagnerEnv(gym.Env):
         self.observe_previous_pressure = observe_previous_pressure
         self.pressure_sensor_positions = np.array(pressure_sensor_positions)
         
-        if self.use_jones_approx:
-            self.N_wake_states = 2
-        else:
+        if self.use_discretized_wake:
             self.t_wake_max = t_max # The maximum amount of time that a wake element is saved in the state vector since its release
             self.N_wake_states = int(self.t_wake_max / self.delta_t) # The number of wake elements that are kept in the state vector
             self.x_wake = np.array([(i + 0.5) * U * delta_t + 0.5 * c for i in range(self.N_wake_states)])
             self.delta_x_wake = U * delta_t
+        else:
+            self.N_wake_states = 2
 
         # The observations don't include the vertical velocity
         # The first element is either the effective AOA or the actual one
@@ -448,14 +448,7 @@ class WagnerEnv(gym.Env):
             self.alpha_ddot = self.discrete_action_values[action] 
 
         # Compute the lift and reward
-        if self.use_jones_approx:
-            CL = compute_jones_circulatory_lift(
-                self.theo_C,
-                self.theo_D,
-                self.kin_state[3],
-                self.wake_state)
-            self.fy = 0.5 * CL * (self.U ** 2) * self.c * self.rho
-        else:
+        if self.use_discretized_wake:
             self.fy = compute_circulatory_lift(
                 self.wake_state,
                 self.x_wake,
@@ -463,6 +456,13 @@ class WagnerEnv(gym.Env):
                 rho=self.rho,
                 U=self.U,
                 c=self.c)
+        else:
+            CL = compute_jones_circulatory_lift(
+                self.theo_C,
+                self.theo_D,
+                self.kin_state[3],
+                self.wake_state)
+            self.fy = 0.5 * CL * (self.U ** 2) * self.c * self.rho
 
         self.fy += compute_added_mass_lift(
             self.h_ddot,
@@ -505,7 +505,7 @@ class WagnerEnv(gym.Env):
         self.time_step += 1
 
         # Update Jones wake states (before updating kinematic states)
-        if self.use_jones_approx:
+        if not self.use_discretized_wake:
             u = np.array([2 * np.pi * self.kin_state[3]])
             self.wake_state = np.matmul(self.theo_A, self.wake_state) + np.dot(self.theo_B, u)
 
@@ -514,7 +514,7 @@ class WagnerEnv(gym.Env):
         self.kin_state = np.matmul(self.kin_A, self.kin_state) + np.dot(self.kin_B, u)
 
         # Update non-Jones wake states
-        if not self.use_jones_approx:
+        if self.use_discretized_wake:
             self.wake_state[1:] = self.wake_state[:-1]
             self.wake_state[0] = compute_new_wake_element(
                     self.kin_state[3],
