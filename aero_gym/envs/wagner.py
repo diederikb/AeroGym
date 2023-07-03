@@ -66,21 +66,12 @@ class WagnerEnv(gym.Env):
 
     ## Action space
 
-    The action represents the angular acceleration (alpha_ddot) applied at a distance `a` from the midchord position.
+    The action is a `numpy.ndarray(dtype=numpy.float32)` with shape `(1,)` which can take values in the range `[-1,1]` and represents the angular acceleration (alpha_ddot) applied at a distance `a` from the midchord position.
+    The actual angular acceleration depends on the value of the argument `alpha_ddot_scale`: `alpha_ddot = action * alpha_ddot_scale`.
+
+    Alternatively, if `use_discrete_actions` is `True`, the action is a `numpy.int64` which can take discrete values `{0, 1, ..., N-1}`, with `N = `num_discrete_actions`, in which case the action `i` gets mapped to the angular acceleration `alpha_ddot = (2 * i  / ( N - 1 ) - 1 ) * alpha_ddot_scale`
 
     The action space depends on the values of the arguments `continuous_actions`, `num_discrete_actions`, and `alpha_ddot_scale`.
-
-    If `continuous_actions` is `False` and N = `num_discrete_actions`:
-
-    | Index | Action                                                          | Min | Max   | Unit |
-    |-------|-----------------------------------------------------------------|-----|-------|------|
-    |   0   | i => alpha_ddot = (2 * i  / ( N - 1 ) - 1 ) * alpha_ddot_scale  |  0  | N - 1 |  -   |
-
-    If `continuous_actions` is `True`:
-
-    | Index | Action                                                          | Min | Max | Unit    |
-    |-------|-----------------------------------------------------------------|-----|-----|---------|
-    |   0   | value => alpha_ddot = value * alpha_ddot_scale                  | -1  | 1   |    -    |
 
     ## Observation Space
 
@@ -198,7 +189,7 @@ class WagnerEnv(gym.Env):
 
     def __init__(self,
                  render_mode=None,
-                 continuous_actions=False,
+                 use_discrete_actions=False,
                  num_discrete_actions=3,
                  delta_t=0.1,
                  t_max=100.0,
@@ -223,7 +214,7 @@ class WagnerEnv(gym.Env):
                  lift_scale=0.1,
                  alpha_ddot_scale=0.1,
                  h_ddot_scale=0.05):
-        self.continuous_actions = continuous_actions
+        self.use_discrete_actions = use_discrete_actions
         self.num_discrete_actions = num_discrete_actions
         self.delta_t = delta_t  # The time step size of the simulation
         self.t_max = t_max
@@ -267,7 +258,6 @@ class WagnerEnv(gym.Env):
             self.N_wake_states = 2
 
         # The observations don't include the vertical velocity
-        # The first element is either the effective AOA or the actual one
         obs_low = np.array(
             [
                 -np.inf, # AOA
@@ -310,11 +300,11 @@ class WagnerEnv(gym.Env):
         self.observation_space = spaces.Box(obs_low, obs_high, (len(obs_low),), dtype=np.float32)
 
         # We have 1 action: the angular acceleration
-        if self.continuous_actions:
+        if self.use_discrete_actions:
+            self.action_space = spaces.Discrete(self.num_discrete_actions)
+        else:
             # Will be rescaled by the threshold
             self.action_space = spaces.Box(-1, 1, (1,), dtype=np.float32)
-        else:
-            self.action_space = spaces.Discrete(self.num_discrete_actions)
         self.discrete_action_values = self.alpha_ddot_scale * np.linspace(-1, 1, num=self.num_discrete_actions) ** 3
 
         # Create the discrete system to advance non-wake states
@@ -442,10 +432,10 @@ class WagnerEnv(gym.Env):
         assert self.h_ddot is not None, "Call reset before using step method."
 
         # Assign action to alpha_ddot
-        if self.continuous_actions:
-            self.alpha_ddot = action[0] * self.alpha_ddot_scale
-        else:
+        if self.use_discrete_actions:
             self.alpha_ddot = self.discrete_action_values[action] 
+        else:
+            self.alpha_ddot = action[0] * self.alpha_ddot_scale
 
         # Compute the lift and reward
         if self.use_discretized_wake:
@@ -490,7 +480,6 @@ class WagnerEnv(gym.Env):
         previous_wake_state = np.copy(self.wake_state)
 
         # Compute the reward
-        #reward = 1 - (self.fy / self.lift_scale) ** 2
         if self.reward_type == 1:
             reward = -(self.fy ** 2) # v1
         elif self.reward_type == 2:
