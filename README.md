@@ -1,1 +1,1 @@
-Set of OpenAI/gym environments for unsteady aerodynamics
+Set of Farama-Foundation/Gymnasium environments for unsteady aerodynamics
