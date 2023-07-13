@@ -200,7 +200,7 @@ class WagnerEnv(gym.Env):
                  c=1,
                  a=0,
                  use_discretized_wake=False,
-                 reward_type=1,
+                 reward_type=3,
                  observe_alpha_eff=False,
                  observe_previous_alpha_eff=False,
                  observe_wake=False,
