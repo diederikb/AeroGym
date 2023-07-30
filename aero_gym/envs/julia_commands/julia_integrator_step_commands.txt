@@ -1,3 +1,8 @@
-update_exogenous!(integrator,[{alpha_ddot}, {h_ddot}])
-# Setting the third argument to true will stop at the correct delta_t's, but there will be discontinuities in the solution
-step!(integrator, {delta_t}, false)
+update_exogenous!(integrator,[{theta_ddot}, {h_ddot}])
+fy_env_step_hist = []
+for _ in 1:{n_steps}
+    step!(integrator)
+    _, _, fy = force(integrator, 1)
+    push!(fy_env_step_hist, fy)
+end
+maximum(fy_env_step_hist)

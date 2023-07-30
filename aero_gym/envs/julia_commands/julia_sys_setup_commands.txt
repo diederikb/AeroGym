@@ -45,3 +45,9 @@ end
 bcdict = Dict("exterior" => my_vsplus, "interior" => my_vsminus)
 
 sys = viscousflow_system(g,body,phys_params=my_params,bc=bcdict,motions=m,reference_body=1);
+
+# Run for a prescribed amount of time to create fully-developed boundary layers
+u0 = init_sol(sys)
+integrator = init(u0,(0,{init_time}+1),sys)
+step!(integrator, {init_time})
+u0 = deepcopy(integrator.u)
