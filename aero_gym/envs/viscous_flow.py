@@ -431,18 +431,18 @@ class ViscousFlowEnv(gym.Env):
 
         # Check if lift goes out of bounds
         if self.lift_termination and (self.fy < self.lift_lower_limit or self.fy > self.lift_upper_limit):
-            # self.terminated = True
-            self.truncated = True
+            self.terminated = True
+            # self.truncated = True
 
         # Check if alpha, h_dot, or alpha_dot go out of bounds
         pos = self.jl.eval("exogenous_position_vector(aux_state(integrator.u),m,1)")
         vel = self.jl.eval("exogenous_velocity_vector(aux_state(integrator.u),m,1)")
         if self.alpha_termination and (pos[0] < -self.alpha_limit or pos[0] > self.alpha_limit):
-            # self.terminated = True
-            self.truncated = True
+            self.terminated = True
+            # self.truncated = True
         if self.alpha_dot_termination and (vel[0] < -self.alpha_dot_limit or vel[0] > self.alpha_dot_limit):
-            # self.terminated = True
-            self.truncated = True
+            self.terminated = True
+            # self.truncated = True
         if self.h_dot_termination and (vel[1] < -self.h_dot_limit or vel[1] > self.h_dot_limit):
             # self.terminated = True
             self.truncated = True
@@ -460,8 +460,12 @@ class ViscousFlowEnv(gym.Env):
             reward = -abs(self.fy_error / self.lift_scale) + 1
         elif self.reward_type == 4:
             reward = -abs(self.fy_error / self.lift_scale) - 2 * abs(d_alpha_ddot / self.alpha_ddot_scale) + 1
+            if self.terminated:
+                reward -= 100
         elif self.reward_type == 5:
-            reward = -1 * (np.exp((self.fy_error / self.lift_scale) ** 2) - 1) + 1 # v5
+            reward = -abs(self.fy_error / self.lift_scale) - 2 * abs(d_alpha_ddot / self.alpha_ddot_scale) + 1
+            if self.terminated:
+                reward -= 1000
         elif self.reward_type == 6:
             reward = -np.sqrt(abs(self.fy_error / self.lift_scale)) + 1
         else:
