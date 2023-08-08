@@ -106,6 +106,8 @@ class ViscousFlowEnv(gym.Env):
                  a=0,
                  xlim=[-0.75,2.0],
                  ylim=[-0.5,0.5],
+                 Re=200,
+                 gridRe=4,
                  reward_type=3,
                  observe_vorticity_field=False,
                  normalize_vorticity=True,
@@ -182,15 +184,13 @@ class ViscousFlowEnv(gym.Env):
             self.lift_lower_limit = lift_lower_limit
 
         # For testing:
-        Re = 200.0
-        grid_Re = 4.0
 
         # Create the Julia process and set up the viscous flow simulation
         self.jl = Julia()
         julia_sys_setup_commands_template = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_sys_setup_commands.txt").read_text()
         julia_sys_setup_commands = julia_sys_setup_commands_template.format(
                 Re=Re,
-                grid_Re=grid_Re,
+                grid_Re=gridRe,
                 xmin=xlim[0],
                 xmax=xlim[1],
                 ymin=ylim[0],
@@ -206,7 +206,8 @@ class ViscousFlowEnv(gym.Env):
         # For now, make sure that the env delta_t is a multiple of delta_t_solver
         self.n_solver_steps_per_env_step = int(np.floor(delta_t / delta_t_solver))
         self.delta_t = self.n_solver_steps_per_env_step * delta_t_solver
-        print("setting timestep to multiple of flow solver timestep: delta_t = " + str(self.delta_t))
+        print("Flow solver timestep: delta_t = " + str(delta_t_solver))
+        print("Setting environment timestep to multiple of flow solver timestep: delta_t = " + str(self.delta_t))
         
         # The default observation
         obs_low = np.array(
