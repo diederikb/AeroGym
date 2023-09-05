@@ -5,6 +5,7 @@ from io import StringIO
 from contextlib import closing
 from julia import Julia
 import importlib.resources
+from pathlib import Path
 import os
 
 # TODO: compute fy in step() in a better way
@@ -92,6 +93,7 @@ class ViscousFlowEnv(gym.Env):
     def __init__(self,
                  render_mode=None,
                  initialization_time=5.0,
+                 initialization_file=None,
                  use_discrete_actions=False,
                  num_discrete_actions=3,
                  delta_t=0.1,
@@ -100,10 +102,12 @@ class ViscousFlowEnv(gym.Env):
                  h_ddot_generator=None,
                  reference_lift_prescribed=None,
                  reference_lift_generator=None,
+                 sys_reinit_commands_file=None,
                  rho=1.0,
                  U=1.0,
                  c=1,
                  a=0,
+                 alpha_init=0.0,
                  xlim=[-0.75,2.0],
                  ylim=[-0.5,0.5],
                  Re=200,
@@ -120,6 +124,10 @@ class ViscousFlowEnv(gym.Env):
                  lift_termination=False,
                  lift_upper_limit=None,
                  lift_lower_limit=None,
+                 h_dot_limit=1.0,
+                 alpha_dot_limit=2.0,
+                 alpha_upper_limit=60 * np.pi / 180,
+                 alpha_lower_limit=-60 * np.pi / 180,
                  h_dot_termination=True,
                  alpha_dot_termination=True,
                  alpha_termination=True,
@@ -142,6 +150,7 @@ class ViscousFlowEnv(gym.Env):
         if reference_lift_prescribed is not None:
             assert len(reference_lift_prescribed) >= int(t_max / delta_t), "The prescribed reference lift has not enough entries for the whole simulation (starting at t=0)"
         self.reference_lift_generator = reference_lift_generator
+        self.sys_reinit_commands_file = sys_reinit_commands_file
         self.rho = rho
         self.U = U
         self.c = c
@@ -161,9 +170,10 @@ class ViscousFlowEnv(gym.Env):
         self.h_dot_termination = h_dot_termination
         self.alpha_dot_termination = alpha_dot_termination
         self.alpha_termination = alpha_termination
-        self.h_dot_limit = U
-        self.alpha_dot_limit = U / (c / 2 + np.abs(a))
-        self.alpha_limit = 80 * np.pi / 180
+        self.h_dot_limit = h_dot_limit
+        self.alpha_dot_limit = alpha_dot_limit
+        self.alpha_upper_limit = alpha_upper_limit
+        self.alpha_lower_limit = alpha_lower_limit
 
         self.observe_vorticity_field = observe_vorticity_field
         self.normalize_vorticity = normalize_vorticity
@@ -198,8 +208,18 @@ class ViscousFlowEnv(gym.Env):
                 U=U,
                 c=c,
                 a=a,
-                init_time=initialization_time)
+                alpha_init=alpha_init)
         self.jl.eval(julia_sys_setup_commands)
+
+        # Create a flow solution that will be used to initialize the episodes at every reset call. If a file is provided, use the data in there to initialize the flow field. If not, run the flow solver to create an solution
+        if initialization_file is not None:
+            julia_sys_initialization_commands_template = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_sys_initialization_with_file_commands.txt").read_text()
+            julia_sys_initialization_commands = julia_sys_initialization_commands_template.format(init_file=initialization_file)
+            self.jl.eval(julia_sys_initialization_commands)
+        else:
+            julia_sys_initialization_commands_template = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_sys_initialization_with_solver_commands.txt").read_text()
+            julia_sys_initialization_commands = julia_sys_initialization_commands_template.format(init_time=initialization_time)
+            self.jl.eval(julia_sys_initialization_commands)
 
         # Get the timestep from julia
         delta_t_solver = self.jl.eval("sys.timestep_func(u0, sys)")
@@ -335,12 +355,20 @@ class ViscousFlowEnv(gym.Env):
         self.truncated = False
         self.terminated = False
 
-        # If there is no prescribed vertical acceleration use the provided function to generate one. If no function was provided, set the vertical acceleration to zero.
+        # Assign the options to the relevant fields
         if options is not None:
             if "h_ddot_prescribed" in options:
                 self.h_ddot_prescribed = options["h_ddot_prescribed"]
             if "h_ddot_generator" in options:
                 self.h_ddot_generator = options["h_ddot_generator"]
+            if "reference_lift_prescribed" in options:
+                self.reference_lift_prescribed = options["reference_lift_prescribed"]
+            if "reference_lift_generator" in options:
+                self.reference_lift_generator = options["reference_lift_generator"]
+            if "sys_reinit_commands" in options:
+                self.sys_reinit_commands_file = options["sys_reinit_commands"]
+
+        # If there is no prescribed vertical acceleration use the provided function to generate one. If no function was provided, set the vertical acceleration to zero.
         if self.h_ddot_prescribed is not None:
             self.h_ddot_list = np.array(self.h_ddot_prescribed)
         elif self.h_ddot_generator is not None:
@@ -351,11 +379,6 @@ class ViscousFlowEnv(gym.Env):
         assert len(self.h_ddot_list) >= int(self.t_max / self.delta_t), "The prescribed vertical acceleration has not enough entries for the whole simulation (starting at t=0)"
 
         # If there is no prescribed reference lift use the provided function to generate one. If no function was provided, set the reference lift to zero.
-        if options is not None:
-            if "reference_lift_prescribed" in options:
-                self.reference_lift_prescribed = options["reference_lift_prescribed"]
-            if "reference_lift_generator" in options:
-                self.reference_lift_generator = options["reference_lift_generator"]
         if self.reference_lift_prescribed is not None:
             self.reference_lift_list = np.array(self.reference_lift_prescribed)
         elif self.reference_lift_generator is not None:
@@ -372,6 +395,13 @@ class ViscousFlowEnv(gym.Env):
         self.fy_error = self.fy - self.reference_lift
         self.p = np.zeros_like(self.pressure_sensor_positions)
         self.alpha_ddot = 0.0
+
+        # If there is a file with system reinitialization commands supplied, run them (e.g. to apply forcing)
+        if self.sys_reinit_commands_file is not None:
+            julia_sys_reinit_commands = Path(self.sys_reinit_commands_file).read_text()
+            self.jl.eval(julia_sys_reinit_commands)
+            amp = self.jl.eval("amp")
+            print("amp = " + str(amp))
 
         # Set up the integrator in Julia
         julia_integrator_reset_commands_template = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_integrator_reset_commands.txt").read_text()
@@ -438,7 +468,7 @@ class ViscousFlowEnv(gym.Env):
         # Check if alpha, h_dot, or alpha_dot go out of bounds
         pos = self.jl.eval("exogenous_position_vector(aux_state(integrator.u),m,1)")
         vel = self.jl.eval("exogenous_velocity_vector(aux_state(integrator.u),m,1)")
-        if self.alpha_termination and (pos[0] < -self.alpha_limit or pos[0] > self.alpha_limit):
+        if self.alpha_termination and (pos[0] < self.alpha_lower_limit or pos[0] > self.alpha_upper_limit):
             self.terminated = True
             # self.truncated = True
         if self.alpha_dot_termination and (vel[0] < -self.alpha_dot_limit or vel[0] > self.alpha_dot_limit):
@@ -468,7 +498,11 @@ class ViscousFlowEnv(gym.Env):
             if self.terminated:
                 reward -= 1000
         elif self.reward_type == 6:
-            reward = -np.sqrt(abs(self.fy_error / self.lift_scale)) + 1
+            reward = -abs(self.fy_error / self.lift_scale) - 2 * abs(d_alpha_ddot / self.alpha_ddot_scale) + 1
+            if abs(self.fy_error) < 0.1 * self.lift_scale:
+                reward += 10
+            if self.terminated:
+                reward -= 100
         else:
             raise NotImplementedError("Specified reward type is not implemented.")
         
@@ -500,7 +534,7 @@ class ViscousFlowEnv(gym.Env):
     def _render_frame(self):
         vorticity_field = np.flip(np.transpose(self.jl.eval("vorticity(integrator).data")),axis=0)
         # quick and dirty mapping from signed float to unsigned int
-        vorticity_field = np.round(np.clip(vorticity_field / (2 * self.vorticity_scale) + 0.5, 0, 1) * 255).astype(np.uint8)
+        # vorticity_field = np.round(np.clip(vorticity_field / (2 * self.vorticity_scale) + 0.5, 0, 1) * 255).astype(np.uint8)
         # add extra dim that indicates the image as a single channel (check if this adds extra memory and if it should be made more efficient)
         vorticity_field = np.expand_dims(vorticity_field, axis=2)
         return vorticity_field
