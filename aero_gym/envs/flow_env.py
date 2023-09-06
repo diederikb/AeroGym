@@ -86,7 +86,6 @@ class FlowEnv(gym.Env):
     metadata = {"render_modes": ["ansi", "grayscale_array"], "render_fps": 4}
 
     def __init__(self,
-                 render_mode=None,
                  use_discrete_actions=False,
                  num_discrete_actions=3,
                  delta_t=0.1,
@@ -204,8 +203,7 @@ class FlowEnv(gym.Env):
             obs_low = np.append(obs_low, np.full_like(self.pressure_sensor_positions, -np.inf))
             obs_high = np.append(obs_high, np.full_like(self.pressure_sensor_positions, np.inf))
 
-        scalar_observation_space = spaces.Box(obs_low, obs_high, (len(obs_low),), dtype=np.float32)
-        self.observation_space = scalar_observation_space
+        self.observation_space = spaces.Box(obs_low, obs_high, (len(obs_low),), dtype=np.float32)
 
         # We have 1 action: the angular acceleration
         if self.use_discrete_actions:
@@ -215,20 +213,14 @@ class FlowEnv(gym.Env):
             self.action_space = spaces.Box(-1, 1, (1,), dtype=np.float32)
         self.discrete_action_values = self.alpha_ddot_scale * np.linspace(-1, 1, num=self.num_discrete_actions) ** 3
 
-        assert render_mode is None or render_mode in self.metadata["render_modes"]
-        self.render_mode = render_mode
+        return self.observation_space
 
-        """
-        If human-rendering is used, `self.window` will be a reference
-        to the window that we draw to. `self.clock` will be a clock that is used
-        to ensure that the environment is rendered at the correct framerate in
-        human-mode. They will remain `None` until human-mode is used for the
-        first time.
-        """
-        self.window = None
-        self.clock = None
+    def _update_kin_state_attributes(self):
+        # Overload in child environment
+        return
 
     def _get_obs(self):
+        self._update_kin_state_attributes()
         scalar_obs = np.array([self.alpha / self.alpha_scale, self.alpha_dot / self.alpha_dot_scale])
 
         # create observation vector
@@ -249,6 +241,7 @@ class FlowEnv(gym.Env):
         return scalar_obs
 
     def _get_info(self):
+        self._update_kin_state_attributes()
         return {"previous scaled fy": self.fy / self.lift_scale,
                 "previous scaled fy_error": self.fy_error / self.lift_scale,
                 "previous scaled alpha_ddot": self.alpha_ddot / self.alpha_ddot_scale,
@@ -261,7 +254,6 @@ class FlowEnv(gym.Env):
                 "time_step": self.time_step}
 
     def reset(self, seed=None, options=None):
-        os.system("vmstat")
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
 
@@ -304,15 +296,16 @@ class FlowEnv(gym.Env):
 
         self.h_ddot = self.h_ddot_list[self.time_step]
         self.reference_lift = self.reference_lift_list[self.time_step]
-        self.fy = 0.0
-        self.fy_error = self.fy - self.reference_lift
-        self.p = np.zeros_like(self.pressure_sensor_positions)
         self.alpha = self.alpha_init
         self.alpha_dot = 0.0
         self.alpha_ddot = 0.0
         self.d_alpha_ddot = 0.0
         self.h_dot = 0.0
         self.h_ddot = 0.0
+        # The following should be set to their actual values in the child's reset function
+        self.fy = 0.0
+        self.fy_error = 0.0
+        self.p = np.zeros_like(self.pressure_sensor_positions)
 
         return
 
@@ -382,8 +375,8 @@ class FlowEnv(gym.Env):
         self.h_ddot = self.h_ddot_list[self.time_step]
         self.reference_lift = self.reference_lift_list[self.time_step]
 
-
     def _render_text(self):
+        self._update_kin_state_attributes()
         outfile = StringIO()
         outfile.write("{:5d}{:10.5f}".format(self.time_step, self.t))
         outfile.write((" {:10.3e}" * 4).format(

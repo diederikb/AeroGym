@@ -6,14 +6,13 @@ import importlib.resources
 from pathlib import Path
 import os
 
-# TODO: compute fy in step() in a better way
-
 class ViscousFlowEnv(FlowEnv):
     """
     """
     metadata = {"render_modes": ["ansi", "grayscale_array"], "render_fps": 4}
 
     def __init__(self,
+                 render_mode=None,
                  initialization_time=5.0,
                  initialization_file=None,
                  sys_reinit_commands_file=None,
@@ -73,13 +72,18 @@ class ViscousFlowEnv(FlowEnv):
                 vorticity_observation_space = spaces.Box(np.inf, -np.inf, shape=(ny, nx, 1), dtype=np.float32)
             self.observation_space = spaces.Dict({"vorticity": vorticity_observation_space, "scalars": self.observation_space})
 
-    def _get_obs(self):
-        # get the kinematic state from julia
+        assert render_mode is None or render_mode in self.metadata["render_modes"]
+        self.render_mode = render_mode
+
+    def _update_kin_state_attributes(self):
         pos = self.jl.eval("exogenous_position_vector(aux_state(integrator.u),m,1)")
         vel = self.jl.eval("exogenous_velocity_vector(aux_state(integrator.u),m,1)")
         self.alpha = -pos[0]
         self.alpha_dot = -vel[0]
+        self.h_dot = vel[1]
+        return
 
+    def _get_obs(self):
         if self.observe_previous_pressure:
             p_body = self.jl.eval("pressurejump(integrator).data")
             x_body = self.jl.eval("collect(body)[1]")
@@ -101,17 +105,6 @@ class ViscousFlowEnv(FlowEnv):
             obs = scalar_obs
 
         return obs
-
-    def _get_info(self):
-        # get the kinematic state from julia
-        pos = self.jl.eval("exogenous_position_vector(aux_state(integrator.u),m,1)")
-        vel = self.jl.eval("exogenous_velocity_vector(aux_state(integrator.u),m,1)")
-        self.alpha = -pos[0]
-        self.alpha_dot = -vel[0]
-        self.h_dot = vel[1]
-        info = super()._get_info() 
-        return info
-
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed, options=options)
@@ -136,8 +129,14 @@ class ViscousFlowEnv(FlowEnv):
         julia_integrator_reset_commands = julia_integrator_reset_commands_template.format(t_max = self.t_max)
         self.jl.eval(julia_integrator_reset_commands)
 
+        _, _, self.fy = self.jl.eval("force(integrator, 1)")
+        self.fy_error = self.fy - self.reference_lift
+
+        # Pressure is computed in _get_obs()
+        self.p = np.zeros_like(self.pressure_sensor_positions)
+
         observation = self._get_obs()
-        info = self._get_info()
+        info = super()._get_info()
 
         if self.render_mode == "human":
             self.render() 
@@ -152,55 +151,41 @@ class ViscousFlowEnv(FlowEnv):
         # Update prescribed (or randomly-generated) values
         super()._update_prescribed_values()
 
-        # Step system
-        # Note that this integrator doesn't take the correct timestep (because stop_at_tdt=false). However, this is the only way to avoid discontinuities in the solution
+        # Step system. Note that we have to take care to take the correct timestep to avoid discontinuities in the solution (this is why we don't use stop_at_tdt)
         julia_integrator_step_commands_template = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_integrator_step_commands.txt").read_text()
         julia_integrator_step_commands = julia_integrator_step_commands_template.format(theta_ddot = -self.alpha_ddot, h_ddot = self.h_ddot, n_steps = self.n_solver_steps_per_env_step)
         self.fy = self.jl.eval(julia_integrator_step_commands)
         self.fy_error = self.fy - self.reference_lift
-        pos = self.jl.eval("exogenous_position_vector(aux_state(integrator.u),m,1)")
-        vel = self.jl.eval("exogenous_velocity_vector(aux_state(integrator.u),m,1)")
-        self.alpha = -pos[0]
-        self.alpha_dot = -vel[0]
-        self.h_dot = vel[1]
+        self._update_kin_state_attributes()
+
+		# Update the time and time step
         self.t = self.jl.eval("integrator.t")
         self.time_step += 1
 
         # For debugging:
         if abs(self.fy) > 1e2:
-            pos = self.jl.eval("exogenous_position_vector(aux_state(integrator.u),m,1)")
-            vel = self.jl.eval("exogenous_velocity_vector(aux_state(integrator.u),m,1)")
             print("t = {t}".format(t = self.t))
             print("fy = {fy}".format(fy = self.fy))
             print("h_ddot = {h_ddot}".format(h_ddot = self.h_ddot))
+            print("h_dot = {h_dot}".format(h_dot = self.h_dot))
             print("alpha_ddot = {alpha_ddot}".format(alpha_ddot = self.alpha_ddot))
-            print("pos = {pos}".format(pos = pos))
-            print("vel = {vel}".format(vel = vel))
+            print("alpha_dot = {alpha_dot}".format(alpha_dot = self.alpha_dot))
+            print("alpha = {alpha}".format(alpha = self.alpha))
 
         # Check if termination or truncation condiations are met
         terminated, truncated = super()._check_termination_truncation()
-        
-
         
         # Compute the reward
         reward = super()._compute_reward()
 
         # Create observation for next state
         observation = self._get_obs()
-        info = self._get_info()
-        
-        if self.render_mode == "human":
-            self.render() 
+        info = super()._get_info()
 
         return observation, reward, terminated, truncated, info
 
     def render(self):
         if self.render_mode == "ansi":
-            pos = self.jl.eval("exogenous_position_vector(aux_state(integrator.u),m,1)")
-            vel = self.jl.eval("exogenous_velocity_vector(aux_state(integrator.u),m,1)")
-            self.alpha = -pos[0]
-            self.alpha_dot = -vel[0]
-            self.h_dot = vel[1]
             return super()._render_text()
         if self.render_mode == "grayscale_array":
             return self._render_frame()
