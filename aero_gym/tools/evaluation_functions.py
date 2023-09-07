@@ -98,7 +98,7 @@ def plotfile(filename, axarr=None, label='', a=0):
     return fig, axarr
 
 """
-Animate the frames in `renderlist` using the episode statistics in `render_list`.
+Animate grayscale renders of vorticity in `renderlist` using the episode statistics in `render_list`. The rotation of the airfoil is performed about the pixels provided in `pivot_idx`.
 """
 def animaterender(filename, render_list, pivot_idx, animate_every=10):
     with open(filename, "r") as readFile:
@@ -115,5 +115,33 @@ def animaterender(filename, render_list, pivot_idx, animate_every=10):
         im.set_transform(Affine2D().rotate_deg_around(*pivot_idx, alpha_list[i] * 180 / np.pi) + plt.gca().transData)
 
     anim = FuncAnimation(fig, animate, frames=range(0, len(render_list), animate_every))
+
+    return anim
+
+"""
+Animate grid renders of vorticity in `renderlist` using the episode statistics in `render_list` and physical grid coordinates in `xg` and `yg`. The rotation of the airfoil is performed about the coordinates provided in `pivot_idx`.
+"""
+def animaterender_contour(filename, xg, yg, render_list, pivot_idx, label='', subplot_kw={}, fig_kw={}, show_inflow=False, quiver_kw=None, animate_every=10, interval=200, alpha_init=0):
+    with open(filename, "r") as readFile:
+        textstr = readFile.readlines()
+        all_lines = [line.split() for line in textstr]
+        alpha_list = [float(x[3]) for x in all_lines]
+        readFile.close()
+        
+    fig, ax = plt.subplots(subplot_kw=subplot_kw, **fig_kw); 
+    ax.axis('scaled')
+
+    def animate(i):
+        ax.clear()
+        cont = plt.contour(xg[3:-3], yg[3:-3], render_list[i][3:-3,3:-3], np.linspace(-10,10,20), cmap='RdBu_r');
+        for c in cont.collections:
+            c.set_transform(Affine2D().rotate_deg_around(*pivot_idx, -alpha_list[i] * 180 / np.pi) + plt.gca().transData)
+        plate, = ax.plot([-0.5,0.5],[0,0],c='black',lw=3)
+        plate.set_transform(Affine2D().rotate_deg_around(*pivot_idx, (-alpha_init - alpha_list[i]) * 180 / np.pi) + plt.gca().transData)
+
+        if show_inflow:
+            ax.quiver(*pivot_idx, 1.0, -h_dot_list[i], **quiver_kw)
+
+    anim = FuncAnimation(fig, animate, frames=range(0, len(render_list), animate_every), interval=interval)
 
     return anim

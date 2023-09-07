@@ -9,7 +9,7 @@ import os
 class ViscousFlowEnv(FlowEnv):
     """
     """
-    metadata = {"render_modes": ["ansi", "grayscale_array"], "render_fps": 4}
+    metadata = {"render_modes": ["ansi", "grayscale_array", "grid"], "render_fps": 4}
 
     def __init__(self,
                  render_mode=None,
@@ -188,13 +188,18 @@ class ViscousFlowEnv(FlowEnv):
         if self.render_mode == "ansi":
             return super()._render_text()
         if self.render_mode == "grayscale_array":
-            return self._render_frame()
+            return self._render_frame_grayscale_array()
+        if self.render_mode == "grid":
+            return self._render_frame_grid()
 
-    def _render_frame(self):
+    def _render_frame_grayscale_array(self):
         vorticity_field = np.flip(np.transpose(self.jl.eval("vorticity(integrator).data")),axis=0)
         # quick and dirty mapping from signed float to unsigned int
-        # vorticity_field = np.round(np.clip(vorticity_field / (2 * self.vorticity_scale) + 0.5, 0, 1) * 255).astype(np.uint8)
+        vorticity_field = np.round(np.clip(vorticity_field / (2 * self.vorticity_scale) + 0.5, 0, 1) * 255).astype(np.uint8)
         # add extra dim that indicates the image as a single channel (check if this adds extra memory and if it should be made more efficient)
         vorticity_field = np.expand_dims(vorticity_field, axis=2)
         return vorticity_field
 
+    def _render_frame_grid(self):
+        vorticity_field = np.transpose(self.jl.eval("vorticity(integrator).data"))
+        return vorticity_field

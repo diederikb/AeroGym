@@ -1,1 +1,1 @@
-from aero_gym.tools.evaluation_functions import evaluate, plotfile, animaterender
+from aero_gym.tools.evaluation_functions import evaluate, plotfile, animaterender, animaterender_contour
