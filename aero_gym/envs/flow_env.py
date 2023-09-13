@@ -113,9 +113,9 @@ class FlowEnv(gym.Env):
                  alpha_dot_limit=2.0,
                  alpha_upper_limit=60 * np.pi / 180,
                  alpha_lower_limit=-60 * np.pi / 180,
-                 h_dot_termination=True,
-                 alpha_dot_termination=True,
-                 alpha_termination=True,
+                 h_dot_termination=False,
+                 alpha_dot_termination=False,
+                 alpha_termination=False,
                  lift_scale=1.0,
                  alpha_ddot_scale=1.0,
                  alpha_dot_scale=1.0,
@@ -242,14 +242,22 @@ class FlowEnv(gym.Env):
 
     def _get_info(self):
         self._update_kin_state_attributes()
-        return {"previous scaled fy": self.fy / self.lift_scale,
-                "previous scaled fy_error": self.fy_error / self.lift_scale,
-                "previous scaled alpha_ddot": self.alpha_ddot / self.alpha_ddot_scale,
+        return {"scaled previous fy": self.fy / self.lift_scale,
+                "scaled previous fy_error": self.fy_error / self.lift_scale,
+                "scaled previous alpha_ddot": self.alpha_ddot / self.alpha_ddot_scale,
                 "scaled alpha_dot": self.alpha_dot / self.alpha_dot_scale,
                 "scaled alpha": self.alpha / self.alpha_scale,
                 "scaled h_ddot": self.h_ddot / self.h_ddot_scale,
                 "scaled h_dot": self.h_dot / self.h_dot_scale,
                 "scaled reference_lift": self.reference_lift / self.lift_scale,
+                "unscaled previous fy": self.fy,
+                "unscaled previous fy_error": self.fy_error,
+                "unscaled previous alpha_ddot": self.alpha_ddot,
+                "unscaled alpha_dot": self.alpha_dot,
+                "unscaled alpha": self.alpha,
+                "unscaled h_ddot": self.h_ddot,
+                "unscaled h_dot": self.h_dot,
+                "unscaled reference_lift": self.reference_lift / self.lift_scale,
                 "t": self.t,
                 "time_step": self.time_step}
 

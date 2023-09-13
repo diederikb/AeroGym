@@ -24,13 +24,13 @@ def evaluate(env, filename, alpha_ddot_prescribed=None):
         writestr = ("{:5d}" + "{:11.5f}" + "{:11.3e} " * 4).format(
             info["time_step"], 
             info["t"], 
-            info["scaled h_dot"], 
-            info["scaled alpha"], 
-            info["scaled alpha_dot"], 
-            info["scaled h_ddot"])
+            info["h_dot"], 
+            info["alpha"], 
+            info["alpha_dot"], 
+            info["h_ddot"])
         obs, reward, terminated, truncated, info = env.step(action)
         episode_return += reward
-        writestr += ("{:11.3e} " * 4).format(info["previous scaled alpha_ddot"], info["previous scaled fy"], reward, episode_return)
+        writestr += ("{:11.3e} " * 4).format(info["unscaled previous alpha_ddot"], info["unscaled previous fy"], reward, episode_return)
         writefile.write(writestr + "\n")
         i+=1
         if terminated or truncated:
@@ -50,13 +50,13 @@ def plotfile(filename, axarr=None, label='', a=0):
     axarr[0,0].set_xlabel('time')
     axarr[0,1].set_ylabel('h dot')
     axarr[0,1].set_xlabel('time')
-    axarr[0,2].set_ylabel('h ddot / h_ddot_scale')
+    axarr[0,2].set_ylabel('h ddot')
     axarr[0,2].set_xlabel('time')
     axarr[1,0].set_ylabel('alpha')
     axarr[1,0].set_xlabel('time')
     axarr[1,1].set_ylabel('alpha dot')
     axarr[1,1].set_xlabel('time')
-    axarr[1,2].set_ylabel('alpha ddot / alpha_ddot_scale')
+    axarr[1,2].set_ylabel('alpha ddot')
     axarr[1,2].set_xlabel('time')
     axarr[2,0].set_ylabel('reward')
     axarr[2,0].set_xlabel('time step')
@@ -121,11 +121,12 @@ def animaterender(filename, render_list, pivot_idx, animate_every=10):
 """
 Animate grid renders of vorticity in `renderlist` using the episode statistics in `render_list` and physical grid coordinates in `xg` and `yg`. The rotation of the airfoil is performed about the coordinates provided in `pivot_idx`.
 """
-def animaterender_contour(filename, xg, yg, render_list, pivot_idx, label='', subplot_kw={}, fig_kw={}, show_inflow=False, quiver_kw=None, animate_every=10, interval=200, alpha_init=0):
+def animaterender_contour(filename, xg, yg, render_list, pivot_idx, subplot_kw={}, fig_kw={}, show_inflow=False, quiver_kw=None, animate_every=10, interval=200, alpha_init=0):
     with open(filename, "r") as readFile:
         textstr = readFile.readlines()
         all_lines = [line.split() for line in textstr]
         alpha_list = [float(x[3]) for x in all_lines]
+        h_dot_list = [float(x[2]) for x in all_lines]
         readFile.close()
         
     fig, ax = plt.subplots(subplot_kw=subplot_kw, **fig_kw); 
