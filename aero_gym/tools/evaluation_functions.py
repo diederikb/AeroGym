@@ -24,10 +24,10 @@ def evaluate(env, filename, alpha_ddot_prescribed=None):
         writestr = ("{:5d}" + "{:11.5f}" + "{:11.3e} " * 4).format(
             info["time_step"], 
             info["t"], 
-            info["h_dot"], 
-            info["alpha"], 
-            info["alpha_dot"], 
-            info["h_ddot"])
+            info["unscaled h_dot"], 
+            info["unscaled alpha"], 
+            info["unscaled alpha_dot"], 
+            info["unscaled h_ddot"])
         obs, reward, terminated, truncated, info = env.step(action)
         episode_return += reward
         writestr += ("{:11.3e} " * 4).format(info["unscaled previous alpha_ddot"], info["unscaled previous fy"], reward, episode_return)
@@ -41,7 +41,7 @@ def evaluate(env, filename, alpha_ddot_prescribed=None):
 """
 Plot the environment states and statistics in `filename`, generated with `evaluate`.
 """
-def plotfile(filename, axarr=None, label='', a=0):
+def plotfile(filename, axarr=None, label=None, a=0):
     if axarr is None:
         fig, axarr = plt.subplots(ncols=3, nrows=3, figsize=(17,12))
     else:
@@ -81,8 +81,8 @@ def plotfile(filename, axarr=None, label='', a=0):
         episode_return_list = [float(x[9]) for x in all_lines]
         readFile.close()
             
-    axarr[0,0].plot(t_hist,fy_hist,label=label, marker='o', markersize=2, linewidth=1)
-    axarr[0,1].plot(t_hist,h_dot_list, marker='o', markersize=2, linewidth=1, label=(label + " (a = " + str(a)))
+    axarr[0,0].plot(t_hist,fy_hist, label=label, marker='o', markersize=2, linewidth=1)
+    axarr[0,1].plot(t_hist,h_dot_list, marker='o', markersize=2, linewidth=1)
     axarr[0,2].plot(t_hist,h_ddot_list, marker='o', markersize=2, linewidth=1)
     axarr[1,0].plot(t_hist,alpha_list, marker='o', markersize=2, linewidth=1)
     axarr[1,1].plot(t_hist,alpha_dot_list, marker='o', markersize=2, linewidth=1)
@@ -91,7 +91,9 @@ def plotfile(filename, axarr=None, label='', a=0):
     axarr[2,1].plot(timestep_hist,episode_return_list, marker='o', markersize=2, linewidth=1)
     axarr[2,2].plot(timestep_hist[:-1],np.diff(t_hist), marker='o', markersize=2, linewidth=1)
 
-    axarr[0,0].legend()
+    if label is not None:
+        axarr[0,0].legend()
+
     for ax in axarr.flatten():
         ax.minorticks_on()
         ax.grid(which='both',axis='y')
@@ -121,7 +123,7 @@ def animaterender(filename, render_list, pivot_idx, animate_every=10):
 """
 Animate grid renders of vorticity in `renderlist` using the episode statistics in `render_list` and physical grid coordinates in `xg` and `yg`. The rotation of the airfoil is performed about the coordinates provided in `pivot_idx`.
 """
-def animaterender_contour(filename, xg, yg, render_list, pivot_idx, subplot_kw={}, fig_kw={}, show_inflow=False, quiver_kw=None, animate_every=10, interval=200, alpha_init=0):
+def animaterender_contour(filename, xg, yg, render_list, pivot_idx, levels, vmin=-20, vmax=20, subplot_kw={}, fig_kw={}, show_inflow=False, quiver_kw=None, animate_every=10, interval=200, alpha_init=0):
     with open(filename, "r") as readFile:
         textstr = readFile.readlines()
         all_lines = [line.split() for line in textstr]
@@ -134,7 +136,7 @@ def animaterender_contour(filename, xg, yg, render_list, pivot_idx, subplot_kw={
 
     def animate(i):
         ax.clear()
-        cont = plt.contour(xg[3:-3], yg[3:-3], render_list[i][3:-3,3:-3], np.linspace(-10,10,20), cmap='RdBu_r');
+        cont = plt.contourf(xg[3:-3], yg[3:-3], render_list[i][3:-3,3:-3], levels, vmin=vmin, vmax=vmax, cmap='bwr');
         for c in cont.collections:
             c.set_transform(Affine2D().rotate_deg_around(*pivot_idx, -alpha_list[i] * 180 / np.pi) + plt.gca().transData)
         plate, = ax.plot([-0.5,0.5],[0,0],c='black',lw=3)

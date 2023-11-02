@@ -3,15 +3,12 @@ from gymnasium import spaces
 import numpy as np
 from io import StringIO
 from contextlib import closing
-import os
 
 class FlowEnv(gym.Env):
-    """
+    r"""
     ## Description
 
-    The ViscousFlow environment is the two-dimensional, viscous, aerodynamic model for an airfoil undergoing arbitrary motions. The airfoil undergoes prescribed or random vertical accelerations and the goal is to minimize the lift variations by controlling the AOA through the angular acceleration of the airfoil.
-
-    TODO
+    The base class for different flow environments that implement the Gymnasium environment API. This class implements some of the functionality that is the same for all flow environments.
 
     ## Action space
 
@@ -22,60 +19,68 @@ class FlowEnv(gym.Env):
 
     ## Observation Space
 
-    TODO: explain scaling
+    The observation space depends on the subclass implementation. This superclass constructor and _get_obs() methods can create an observation space and vector, which the subclass can further modify. Each element of the observation vector is scaled by its corresponding scaling, which can be passed to the constructor. For example, the angular velocity `alpha_dot` is scaled by `alpha_dot_scaled`. This allows the user to normalize the observations to improve the neural network training.
 
     The default observation space is an `ndarray` with shape `(2,)` where the elements correspond to the following:
 
-    | Index | Observation                                                                 | Min    | Max    | Unit    |
-    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | angle of attack at the current timestep                                     | -Inf   |  Inf   | rad     |
-    |   1   | angular velocity of the wing at the current timestep                        | -Inf   |  Inf   | rad/T   |
+    | Index | Observation                                                                 | Min    | Max    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|
+    |   0   | angle of attack at the current timestep                                     | -Inf   |  Inf   |
+    |   1   | angular velocity of the wing at the current timestep                        | -Inf   |  Inf   |
 
     Setting the following keyword arguments to `True` will append the observation space with the following arrays (in the order that is given here):
 
-    `observe_vorticity_field`
-    `observe_vorticity_field`
-
     `observe_h_ddot`
 
-    | Index | Observation                                                                 | Min    | Max    | Unit    |
-    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | vertical acceleration of the wing at the current timestep                   | -Inf   |  Inf   | L/T^2   |
+    | Index | Observation                                                                 | Min    | Max    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|
+    |   0   | vertical acceleration of the wing at the current timestep                   | -Inf   |  Inf   |
 
     `observe_h_dot`
 
-    | Index | Observation                                                                 | Min    | Max    | Unit    |
-    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | vertical velocity of the wing at the current timestep                       | -Inf   |  Inf   | L/T     |
+    | Index | Observation                                                                 | Min    | Max    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|
+    |   0   | vertical velocity of the wing at the current timestep                       | -Inf   |  Inf   |
     
     `observe_previous_lift`
 
-    | Index | Observation                                                                 | Min    | Max    | Unit    |
-    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | lift at the previous timestep (per unit depth)                              | -Inf   |  Inf   | M/T^2   |
+    | Index | Observation                                                                 | Min    | Max    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|
+    |   0   | lift at the previous timestep                                               | -Inf   |  Inf   |
+    
+    `observe_previous_lift_error`
+
+    | Index | Observation                                                                 | Min    | Max    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|
+    |   0   | lift minus reference lift at the previous timestep                          | -Inf   |  Inf   |
 
     `observe_previous_pressure` (N = length of `pressure_sensor_positions`)
     
-    | Index | Observation                                                                 | Min    | Max    | Unit    |
-    |-------|-----------------------------------------------------------------------------|--------|--------|---------|
-    |   0   | pressure at the first pressure sensor position at the previous timestep     | -Inf   |  Inf   | M/LT^2  |
-    |   .   |                                     .                                       |   .    |   .    |    .    |
-    |   .   |                                     .                                       |   .    |   .    |    .    |
-    |   .   |                                     .                                       |   .    |   .    |    .    |
-    |  N-1  | pressure at the last pressure sensor position at the previous timestep      | -Inf   |  Inf   | M/LT^2  |
+    | Index | Observation                                                                 | Min    | Max    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|
+    |   0   | pressure at the first pressure sensor position at the previous timestep     | -Inf   |  Inf   |
+    |   .   |                                     .                                       |   .    |   .    |
+    |   .   |                                     .                                       |   .    |   .    |
+    |   .   |                                     .                                       |   .    |   .    |
+    |  N-1  | pressure at the last pressure sensor position at the previous timestep      | -Inf   |  Inf   |
 
     ## Rewards
 
-    TODO
+    The reward function can be specified by setting the `reward_function` keyword to the corresponding number of the desired function. Check the implementation of `_compute_reward()` for available options.
 
     ## Starting State
 
-    The episode time, kinematic states, flow states, and previous lift are all initialized to zero. The vertical acceleration is initialized to its first value.
+    The vertical acceleration is initialized to its first value. The angle of attack is initialized to `alpha_init`. The other kinematic states, the episode time, flow states, and previous lift are all initialized to zero.
 
     ## Episode End
 
     The episode ends if one of the following occurs:
-    1. Termination: Absolute value of the lift is greater than `lift_scale`
+    1. Termination:
+        occurs when either of the following is true:
+        - `lift_termination` is `True` and the lift is higher than `lift_upper_limit` or lower than `lift_lower_limit`.
+        - `alpha_termination` is `True` and `alpha` is higher than `alpha_upper_limit` or lower than `alpha_lower_limit`.
+        - `alpha_dot_termination` is `True` and `alpha_dot` is higher than `alpha_dolt_limit` or lower than `-alpha_dot_limit`.
+        - `h_dot_termination` is `True` and `h_dot` is higher than `h_dot_limit` or lower than `-h_dot_limit`.
     2. Truncation: Episode time `t` is greater than or equal to `t_max`
 
     ## Arguments
@@ -83,8 +88,6 @@ class FlowEnv(gym.Env):
     TODO
 
     """
-    metadata = {"render_modes": ["ansi", "grayscale_array"], "render_fps": 4}
-
     def __init__(self,
                  use_discrete_actions=False,
                  num_discrete_actions=3,
@@ -203,7 +206,7 @@ class FlowEnv(gym.Env):
             obs_low = np.append(obs_low, np.full_like(self.pressure_sensor_positions, -np.inf))
             obs_high = np.append(obs_high, np.full_like(self.pressure_sensor_positions, np.inf))
 
-        self.observation_space = spaces.Box(obs_low, obs_high, (len(obs_low),), dtype=np.float32)
+        self.scalar_observation_space = spaces.Box(obs_low, obs_high, (len(obs_low),), dtype=np.float32)
 
         # We have 1 action: the angular acceleration
         if self.use_discrete_actions:
@@ -212,8 +215,6 @@ class FlowEnv(gym.Env):
             # Will be rescaled by the threshold
             self.action_space = spaces.Box(-1, 1, (1,), dtype=np.float32)
         self.discrete_action_values = self.alpha_ddot_scale * np.linspace(-1, 1, num=self.num_discrete_actions) ** 3
-
-        return self.observation_space
 
     def _update_kin_state_attributes(self):
         # Overload in child environment

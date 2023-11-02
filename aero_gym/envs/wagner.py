@@ -2,30 +2,8 @@ from aero_gym.envs.flow_env import FlowEnv
 from gymnasium import spaces
 import numpy as np
 from scipy import signal
-from io import StringIO
-from contextlib import closing
 
 #TODO: assert xp's are between -c/2 and c/2
-#TODO: check scalings for alpha_dot, h_dot, alpha, and alpha_eff
-
-def compute_jones_circulatory_lift(theo_C, theo_D, alpha_eff, jones_states):
-    """
-    Compute the circulatory lift from the Jones approximation states and alpha_eff.
-    """
-    return (2 * np.pi * np.dot(theo_D, [alpha_eff]) + np.dot(theo_C, jones_states))[0]
-
-def compute_added_mass_lift(h_ddot, alpha_dot, alpha_ddot, rho=1.0, U=1.0, c=1.0, a=0.0):
-    """
-    Compute the added mass lift from kinematic states (Eldredge2019 equation 8.159).
-    """
-    return 0.25 * rho * c ** 2 * np.pi * (-h_ddot - a * alpha_ddot + U * alpha_dot)
-
-def compute_circulatory_pressure_diff(xp, alpha_eff, gamma_wake, x_wake, delta_x_wake, rho=1.0, U=1.0, c=1.0):
-    """
-    Compute the circulatory pressure difference between the upper and lower surface (pu-pl) at `xp` from the wake state.
-    """
-    p = np.sqrt((c/2 - xp) / (c/2 + xp)) * (-2 * rho * U ** 2 * alpha_eff + rho * U / np.pi * delta_x_wake * np.sum(gamma_wake / (np.sqrt(x_wake ** 2 - 0.25 * c ** 2))))
-    return p
 
 def compute_added_mass_pressure_diff(xp, h_ddot, alpha_dot, alpha_ddot, rho=1.0, U=1.0, c=1.0, a=0.0):
     """
@@ -38,7 +16,7 @@ class WagnerEnv(FlowEnv):
     """
     ## Description
 
-    The Wagner environment is the aerodynamic model for a flat plate undergoing arbitrary motions in the context of classical unsteady aerodynamics, or, the Wagner problem (Wagner, 1925). The flat plate undergoes prescribed or random vertical accelerations and the goal is to minimize the lift variations by controlling the AOA through the angular acceleration of the plate.
+    This environment is the aerodynamic model for a flat plate undergoing arbitrary motions in the context of classical unsteady aerodynamics, or, the Wagner problem (Wagner, 1925). The flat plate undergoes prescribed or random vertical accelerations and the goal is to minimize the lift variations by controlling the AOA through the angular acceleration of the plate.
     """
     metadata = {"render_modes": ["ansi"], "render_fps": 4}
 
@@ -49,7 +27,7 @@ class WagnerEnv(FlowEnv):
                  observe_wake=False,
                  observe_previous_wake=False,
                  alpha_eff_scale=1,
-				 **kwargs):
+		 **kwargs):
         super().__init__(**kwargs)
         self.alpha_eff_scale = alpha_eff_scale
         self.observe_alpha_eff = observe_alpha_eff
@@ -60,8 +38,8 @@ class WagnerEnv(FlowEnv):
         self.N_wake_states = 2
 
         # Append the observation space of the parent class
-        obs_low = self.observation_space.low
-        obs_high = self.observation_space.high
+        obs_low = self.scalar_observation_space.low
+        obs_high = self.scalar_observation_space.high
 
         if self.observe_alpha_eff:
             obs_low = np.append(obs_low, -np.inf)
@@ -152,12 +130,10 @@ class WagnerEnv(FlowEnv):
         super()._update_prescribed_values()
 
         # Compute the lift
-        CL = compute_jones_circulatory_lift(
-            self.theo_C,
-            self.theo_D,
-            self.kin_state[3],
-            self.wake_state)
-        fy_circ = 0.5 * CL * (self.U ** 2) * self.c * self.rho
+        fy_circ = 0.5 * (self.U ** 2) * self.c * self.rho * (2 * np.pi * np.dot(self.theo_D, [self.kin_state[3]]) + np.dot(self.theo_C, self.wake_state))[0]
+        fy_am = 0.25 * self.rho * self.c ** 2 * np.pi * (-self.h_ddot - self.a * self.alpha_ddot + self.U * self.kin_state[2])
+        self.fy = fy_circ + fy_am
+        self.fy_error = self.fy - self.reference_lift
 
         # Compute the pressure using the circulatory lift
         self.p = [
@@ -171,16 +147,6 @@ class WagnerEnv(FlowEnv):
                 c=self.c,
                 a=self.a)
             - 2 * fy_circ / (np.pi * self.c) * np.sqrt((0.5 * self.c + xp) / (0.5 * self.c - xp)) for xp in self.pressure_sensor_positions]
-
-        self.fy = fy_circ + compute_added_mass_lift(
-            self.h_ddot,
-            self.kin_state[2],
-            self.alpha_ddot,
-            rho=self.rho,
-            U=self.U,
-            c=self.c,
-            a=self.a)
-        self.fy_error = self.fy - self.reference_lift
 
         # Save the state before updating the new current state
         previous_kin_state = np.copy(self.kin_state)
@@ -208,9 +174,6 @@ class WagnerEnv(FlowEnv):
         observation = self._get_obs(self.kin_state, previous_kin_state, self.wake_state, previous_wake_state)
         info = super()._get_info()
         
-        if self.render_mode == "human":
-            self.render() 
-
         return observation, reward, terminated, truncated, info
 
     def render(self):

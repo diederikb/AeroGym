@@ -2,19 +2,19 @@ using ViscousFlow
 
 # setup grid
 my_params = Dict()
-my_params["Re"] = {Re}
-my_params["grid Re"] = {grid_Re}
-xlim = ({xmin},{xmax})
-ylim = ({ymin},{ymax})
+my_params["Re"] = Re
+my_params["grid Re"] = grid_Re
+xlim = (xmin,xmax)
+ylim = (ymin,ymax)
 g = setup_grid(xlim, ylim, my_params)
 
 # setup airfoil
-U = {U}
-c = {c}
-a = {a}
+U = U
+c = c
+a = a
 ds = surface_point_spacing(g, my_params)
 body = Plate(1.0, ds)
-X = MotionTransform([0.0, 0.0], -({alpha_init}))
+X = MotionTransform([0.0, 0.0], -(alpha_init))
 transform_body!(body, X)
 
 parent_body, child_body = 0, 1

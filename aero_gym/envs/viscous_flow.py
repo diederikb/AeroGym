@@ -6,8 +6,11 @@ import importlib.resources
 from pathlib import Path
 import os
 
+# TODO: need to fix the behavior when alpha_init is specified.
+
 class ViscousFlowEnv(FlowEnv):
     """
+    The ViscousFlow environment is the two-dimensional, viscous, aerodynamic model for an airfoil undergoing arbitrary motions. The airfoil undergoes prescribed or random vertical accelerations and the goal is to minimize the lift variations by controlling the AOA through the angular acceleration of the airfoil.
     """
     metadata = {"render_modes": ["ansi", "grayscale_array", "grid"], "render_fps": 4}
 
@@ -32,28 +35,16 @@ class ViscousFlowEnv(FlowEnv):
 
         # Create the Julia process and set up the viscous flow simulation
         self.jl = Julia()
-        julia_sys_setup_commands_template = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_sys_setup_commands.txt").read_text()
-        julia_sys_setup_commands = julia_sys_setup_commands_template.format(
-                Re=Re,
-                grid_Re=gridRe,
-                xmin=xlim[0],
-                xmax=xlim[1],
-                ymin=ylim[0],
-                ymax=ylim[1],
-                U=self.U,
-                c=self.c,
-                a=self.a,
-                alpha_init=self.alpha_init)
+        self.jl.eval(f"Re={Re}; grid_Re={gridRe}; xmin={xlim[0]}; xmax={xlim[1]}; ymin={ylim[0]}; ymax={ylim[1]}; U={self.U}; c={self.c}; a={self.a}; alpha_init={self.alpha_init}; init_time={initialization_time}; t_max={self.t_max}")
+        julia_sys_setup_commands = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_sys_setup_commands.jl").read_text()
         self.jl.eval(julia_sys_setup_commands)
 
         # Create a flow solution that will be used to initialize the episodes at every reset call. If a file is provided, use the data in there to initialize the flow field. If not, run the flow solver to create an solution
         if initialization_file is not None:
-            julia_sys_initialization_commands_template = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_sys_initialization_with_file_commands.txt").read_text()
-            julia_sys_initialization_commands = julia_sys_initialization_commands_template.format(init_file=initialization_file)
-            self.jl.eval(julia_sys_initialization_commands)
+            # TODO
+            raise NotImplementedError
         else:
-            julia_sys_initialization_commands_template = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_sys_initialization_with_solver_commands.txt").read_text()
-            julia_sys_initialization_commands = julia_sys_initialization_commands_template.format(init_time=initialization_time)
+            julia_sys_initialization_commands = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_sys_initialization_with_solver_commands.jl").read_text()
             self.jl.eval(julia_sys_initialization_commands)
 
         # Get the timestep from julia
@@ -70,7 +61,9 @@ class ViscousFlowEnv(FlowEnv):
                 vorticity_observation_space = spaces.Box(0, 255, shape=(ny, nx, 1), dtype=np.uint8)
             else:
                 vorticity_observation_space = spaces.Box(np.inf, -np.inf, shape=(ny, nx, 1), dtype=np.float32)
-            self.observation_space = spaces.Dict({"vorticity": vorticity_observation_space, "scalars": self.observation_space})
+            self.observation_space = spaces.Dict({"vorticity": vorticity_observation_space, "scalars": self.scalar_observation_space})
+        else:
+            self.observation_space = self.scalar_observation_space
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -121,12 +114,12 @@ class ViscousFlowEnv(FlowEnv):
         if self.sys_reinit_commands_file is not None:
             julia_sys_reinit_commands = Path(self.sys_reinit_commands_file).read_text()
             self.jl.eval(julia_sys_reinit_commands)
-            amp = self.jl.eval("amp")
-            print("amp = " + str(amp))
+            # Recompute n_solver_steps_per_env_step in case the time step changed in the new system
+            delta_t_solver = self.jl.eval("sys.timestep_func(u0, sys)")
+            self.n_solver_steps_per_env_step = int(np.floor(self.delta_t / delta_t_solver))
 
         # Set up the integrator in Julia
-        julia_integrator_reset_commands_template = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_integrator_reset_commands.txt").read_text()
-        julia_integrator_reset_commands = julia_integrator_reset_commands_template.format(t_max = self.t_max)
+        julia_integrator_reset_commands = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_integrator_reset_commands.jl").read_text()
         self.jl.eval(julia_integrator_reset_commands)
 
         _, _, self.fy = self.jl.eval("force(integrator, 1)")
@@ -152,8 +145,8 @@ class ViscousFlowEnv(FlowEnv):
         super()._update_prescribed_values()
 
         # Step system. Note that we have to take care to take the correct timestep to avoid discontinuities in the solution (this is why we don't use stop_at_tdt)
-        julia_integrator_step_commands_template = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_integrator_step_commands.txt").read_text()
-        julia_integrator_step_commands = julia_integrator_step_commands_template.format(theta_ddot = -self.alpha_ddot, h_ddot = self.h_ddot, n_steps = self.n_solver_steps_per_env_step)
+        self.jl.eval(f"theta_ddot = -({self.alpha_ddot}); h_ddot = {self.h_ddot}; n_steps = {self.n_solver_steps_per_env_step}")
+        julia_integrator_step_commands = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_integrator_step_commands.jl").read_text()
         self.fy = self.jl.eval(julia_integrator_step_commands)
         self.fy_error = self.fy - self.reference_lift
         self._update_kin_state_attributes()
