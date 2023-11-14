@@ -4,6 +4,8 @@ import numpy as np
 from io import StringIO
 from contextlib import closing
 
+# TODO: reverse error definition
+
 class FlowEnv(gym.Env):
     r"""
     ## Description
@@ -103,10 +105,13 @@ class FlowEnv(gym.Env):
                  a=0,
                  alpha_init=0.0,
                  reward_type=3,
+                 observe_alpha=True,
+                 observe_alpha_dot=True,
                  observe_h_ddot=False,
                  observe_h_dot=False,
                  observe_previous_lift=False,
                  observe_previous_lift_error=False,
+                 observe_previous_lift_integrated_error=False,
                  observe_previous_pressure=False,
                  pressure_sensor_positions=[],
                  lift_termination=False,
@@ -161,10 +166,13 @@ class FlowEnv(gym.Env):
         self.alpha_upper_limit = alpha_upper_limit
         self.alpha_lower_limit = alpha_lower_limit
 
+        self.observe_alpha = observe_alpha
+        self.observe_alpha_dot = observe_alpha_dot
         self.observe_h_ddot = observe_h_ddot
         self.observe_h_dot = observe_h_dot
         self.observe_previous_lift = observe_previous_lift
         self.observe_previous_lift_error = observe_previous_lift_error
+        self.observe_previous_lift_integrated_error = observe_previous_lift_integrated_error
         self.observe_previous_pressure = observe_previous_pressure
         self.pressure_sensor_positions = np.array(pressure_sensor_positions)
 
@@ -180,19 +188,23 @@ class FlowEnv(gym.Env):
         # The default observation
         obs_low = np.array(
             [
-                -np.inf, # AOA
-                -np.inf, # angular velocity of the wing
+                # No default observation
             ]
         )
 
         obs_high = np.array(
             [
-                np.inf, # AOA
-                np.inf, # angular velocity of the wing
+                # No default observation
             ]
         )
         
-        # Extra observations specified with keyword arguments
+        # Observations specified with keyword arguments
+        if self.observe_alpha:
+            obs_low = np.append(obs_low, -np.inf)
+            obs_high = np.append(obs_high, np.inf)
+        if self.observe_alpha_dot:
+            obs_low = np.append(obs_low, -np.inf)
+            obs_high = np.append(obs_high, np.inf)
         if self.observe_h_ddot:
             obs_low = np.append(obs_low, -np.inf)
             obs_high = np.append(obs_high, np.inf)
@@ -200,6 +212,9 @@ class FlowEnv(gym.Env):
             obs_low = np.append(obs_low, -np.inf)
             obs_high = np.append(obs_high, np.inf)
         if self.observe_previous_lift_error:
+            obs_low = np.append(obs_low, -np.inf)
+            obs_high = np.append(obs_high, np.inf)
+        if self.observe_previous_lift_integrated_error:
             obs_low = np.append(obs_low, -np.inf)
             obs_high = np.append(obs_high, np.inf)
         if self.observe_previous_pressure:
@@ -222,9 +237,13 @@ class FlowEnv(gym.Env):
 
     def _get_obs(self):
         self._update_kin_state_attributes()
-        scalar_obs = np.array([self.alpha / self.alpha_scale, self.alpha_dot / self.alpha_dot_scale])
+        scalar_obs = np.array([])
 
         # create observation vector
+        if self.observe_alpha:
+            scalar_obs = np.append(scalar_obs, self.alpha / self.alpha_scale)
+        if self.observe_alpha_dot:
+            scalar_obs = np.append(scalar_obs, self.alpha_dot / self.alpha_dot_scale)
         if self.observe_h_ddot:
             scalar_obs = np.append(scalar_obs, self.h_ddot / self.h_ddot_scale)
         if self.observe_h_dot:
@@ -233,6 +252,8 @@ class FlowEnv(gym.Env):
             scalar_obs = np.append(scalar_obs, self.fy / self.lift_scale)
         if self.observe_previous_lift_error:
             scalar_obs = np.append(scalar_obs, self.fy_error / self.lift_scale)
+        if self.observe_previous_lift_integrated_error:
+            scalar_obs = np.append(scalar_obs, self.fy_integrated_error / self.lift_scale)
         if self.observe_previous_pressure:
             scaled_pressure = [p / self.pressure_scale for p in self.p]
             scalar_obs = np.append(scalar_obs, scaled_pressure)
@@ -245,6 +266,7 @@ class FlowEnv(gym.Env):
         self._update_kin_state_attributes()
         return {"scaled previous fy": self.fy / self.lift_scale,
                 "scaled previous fy_error": self.fy_error / self.lift_scale,
+                "scaled previous fy_integrated_error": self.fy_integrated_error / self.lift_scale,
                 "scaled previous alpha_ddot": self.alpha_ddot / self.alpha_ddot_scale,
                 "scaled alpha_dot": self.alpha_dot / self.alpha_dot_scale,
                 "scaled alpha": self.alpha / self.alpha_scale,
@@ -253,6 +275,7 @@ class FlowEnv(gym.Env):
                 "scaled reference_lift": self.reference_lift / self.lift_scale,
                 "unscaled previous fy": self.fy,
                 "unscaled previous fy_error": self.fy_error,
+                "unscaled previous fy_integrated_error": self.fy_integrated_error,
                 "unscaled previous alpha_ddot": self.alpha_ddot,
                 "unscaled alpha_dot": self.alpha_dot,
                 "unscaled alpha": self.alpha,
@@ -273,6 +296,7 @@ class FlowEnv(gym.Env):
         self.terminated = False
 
         # Assign the options to the relevant fields
+        # This can be changed to looping over the option keys and trying them as attributes of self
         if options is not None:
             if "h_ddot_prescribed" in options:
                 self.h_ddot_prescribed = options["h_ddot_prescribed"]
@@ -282,6 +306,14 @@ class FlowEnv(gym.Env):
                 self.reference_lift_prescribed = options["reference_lift_prescribed"]
             if "reference_lift_generator" in options:
                 self.reference_lift_generator = options["reference_lift_generator"]
+            if "reward_type" in options:
+                self.reward_type = options["reward_type"]
+            if "lift_termination" in options:
+                self.lift_termination = options["lift_termination"]
+            if "lift_upper_limit" in options:
+                self.lift_upper_limit = options["lift_upper_limit"]
+            if "lift_lower_limit" in options:
+                self.lift_lower_limit = options["lift_lower_limit"]
 
         # If there is no prescribed vertical acceleration use the provided function to generate one. If no function was provided, set the vertical acceleration to zero.
         if self.h_ddot_prescribed is not None:
@@ -314,6 +346,7 @@ class FlowEnv(gym.Env):
         # The following should be set to their actual values in the child's reset function
         self.fy = 0.0
         self.fy_error = 0.0
+        self.fy_integrated_error = 0.0
         self.p = np.zeros_like(self.pressure_sensor_positions)
 
         return
@@ -358,7 +391,7 @@ class FlowEnv(gym.Env):
         if self.reward_type == 1:
             reward = -((self.fy_error / self.lift_scale) ** 2) # v1
         elif self.reward_type == 2:
-            reward = -((self.fy_error / self.lift_scale) ** 2 + 0.1 * (self.alpha_ddot / self.alpha_ddot_scale) ** 2) # v2
+            reward = -abs(self.fy_error / self.lift_scale)
         elif self.reward_type == 3:
             reward = -abs(self.fy_error / self.lift_scale) + 1
         elif self.reward_type == 4:
@@ -375,6 +408,22 @@ class FlowEnv(gym.Env):
                 reward += 10
             if self.terminated:
                 reward -= 100
+        elif self.reward_type == 7:
+            reward = -abs(self.fy_error / self.lift_scale) - abs(self.fy_integrated_error) + 1
+        elif self.reward_type == 8:
+            reward = -np.sqrt(abs(self.fy_error / self.lift_scale)) + 1
+        elif self.reward_type == 9:
+            reward = -((self.fy_error / self.lift_scale) ** 2)
+            if abs(self.fy_error) < 0.01 * self.lift_scale:
+                reward += 10
+        elif self.reward_type == 10:
+            reward = -((self.fy_error / self.lift_scale) ** 2)
+            if abs(self.fy_error) < 0.001 * self.lift_scale:
+                reward += 10
+        elif self.reward_type == 11:
+            reward = -abs(self.fy_error / self.lift_scale)
+            if abs(self.fy_error) < 0.001 * self.lift_scale:
+                reward += 10
         else:
             raise NotImplementedError("Specified reward type is not implemented.")
 

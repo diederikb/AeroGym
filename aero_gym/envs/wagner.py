@@ -134,6 +134,7 @@ class WagnerEnv(FlowEnv):
         fy_am = 0.25 * self.rho * self.c ** 2 * np.pi * (-self.h_ddot - self.a * self.alpha_ddot + self.U * self.kin_state[2])
         self.fy = fy_circ + fy_am
         self.fy_error = self.fy - self.reference_lift
+        self.fy_integrated_error = self.fy_integrated_error + self.fy_error * self.delta_t
 
         # Compute the pressure using the circulatory lift
         self.p = [
@@ -152,9 +153,6 @@ class WagnerEnv(FlowEnv):
         previous_kin_state = np.copy(self.kin_state)
         previous_wake_state = np.copy(self.wake_state)
 
-        # Compute the reward
-        reward = super()._compute_reward()
-
         # Update the time and time step
         self.t += self.delta_t
         self.time_step += 1
@@ -169,6 +167,9 @@ class WagnerEnv(FlowEnv):
 
         # Check if termination or truncation condiations are met
         terminated, truncated = super()._check_termination_truncation()
+
+        # Compute the reward
+        reward = super()._compute_reward()
 
         # Create observation for next state
         observation = self._get_obs(self.kin_state, previous_kin_state, self.wake_state, previous_wake_state)

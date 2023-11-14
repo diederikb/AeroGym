@@ -149,6 +149,7 @@ class ViscousFlowEnv(FlowEnv):
         julia_integrator_step_commands = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_integrator_step_commands.jl").read_text()
         self.fy = self.jl.eval(julia_integrator_step_commands)
         self.fy_error = self.fy - self.reference_lift
+        self.fy_integrated_error = self.fy_integrated_error + self.fy_error * self.delta_t
         self._update_kin_state_attributes()
 
 		# Update the time and time step
