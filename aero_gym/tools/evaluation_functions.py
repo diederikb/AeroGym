@@ -4,15 +4,19 @@ from matplotlib.transforms import Affine2D
 from matplotlib.animation import FuncAnimation
 import math
 import numpy as np
+import os
 
 """
 Run an episode of environment `env`, performing the actions in `alpha_ddot_prescribed`, if defined, and write the environment states and statistics to `filename`. 
 """
-def evaluate(env, filename, alpha_ddot_prescribed=None):
+def evaluate(env, filepath, alpha_ddot_prescribed=None):
     render_list = []
-    writefile = open(filename, "w")
+    writefile = open(filepath, "w")
+    directory, filename = os.path.split(filepath)
+    flowwritefile = open(os.path.join(directory, "flow_" + filename), "w")
     obs, info = env.reset()
     episode_return = 0
+    reward = 0
     i = 0
     while 1:
         render_list.append(env.render())
@@ -28,14 +32,19 @@ def evaluate(env, filename, alpha_ddot_prescribed=None):
             info["unscaled alpha"], 
             info["unscaled alpha_dot"], 
             info["unscaled h_ddot"])
-        obs, reward, terminated, truncated, info = env.step(action)
-        episode_return += reward
         writestr += ("{:11.3e} " * 4).format(info["unscaled previous alpha_ddot"], info["unscaled previous fy"], reward, episode_return)
         writefile.write(writestr + "\n")
+        obs, reward, terminated, truncated, info = env.step(action)
+        episode_return += reward
+        if "unscaled flow fy" in info.keys():
+            for flow_step in range(len(info["flow t"])):
+                flowwritestr = ("{:11.5f}" + "{:11.3e} ").format(info["flow t"][flow_step], info["unscaled flow fy"][flow_step])
+                flowwritefile.write(flowwritestr + "\n")
         i+=1
         if terminated or truncated:
             break
     writefile.close()
+    flowwritefile.close()
     return obs, info, render_list
 
 """
@@ -123,7 +132,7 @@ def animaterender(filename, render_list, pivot_idx, animate_every=10):
 """
 Animate grid renders of vorticity in `renderlist` using the episode statistics in `render_list` and physical grid coordinates in `xg` and `yg`. The rotation of the airfoil is performed about the coordinates provided in `pivot_idx`.
 """
-def animaterender_contour(filename, xg, yg, render_list, pivot_idx, levels, vmin=-20, vmax=20, subplot_kw={}, fig_kw={}, show_inflow=False, quiver_kw=None, animate_every=10, interval=200, alpha_init=0):
+def animaterender_contour(filename, xg, yg, render_list, pivot_idx, levels, vmin=-20, vmax=20, quiver_pivot=[0,0], subplot_kw={}, fig_kw={}, show_inflow=False, quiver_kw={}, animate_every=10, interval=200, alpha_init=0):
     with open(filename, "r") as readFile:
         textstr = readFile.readlines()
         all_lines = [line.split() for line in textstr]
@@ -143,7 +152,7 @@ def animaterender_contour(filename, xg, yg, render_list, pivot_idx, levels, vmin
         plate.set_transform(Affine2D().rotate_deg_around(*pivot_idx, (-alpha_init - alpha_list[i]) * 180 / np.pi) + plt.gca().transData)
 
         if show_inflow:
-            ax.quiver(*pivot_idx, 1.0, -h_dot_list[i], **quiver_kw)
+            ax.quiver(*quiver_pivot, 1.0, -h_dot_list[i], **quiver_kw)
 
     anim = FuncAnimation(fig, animate, frames=range(0, len(render_list), animate_every), interval=interval)
 
