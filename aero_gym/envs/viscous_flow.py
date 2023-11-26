@@ -147,7 +147,9 @@ class ViscousFlowEnv(FlowEnv):
         # Step system. Note that we have to take care to take the correct timestep to avoid discontinuities in the solution (this is why we don't use stop_at_tdt)
         self.jl.eval(f"theta_ddot = -({self.alpha_ddot}); h_ddot = {self.h_ddot}; n_steps = {self.n_solver_steps_per_env_step}")
         julia_integrator_step_commands = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_integrator_step_commands.jl").read_text()
-        self.fy = self.jl.eval(julia_integrator_step_commands)
+        (flow_fy_last_n_steps, flow_t_last_n_steps) = self.jl.eval(julia_integrator_step_commands)
+        self.fy = flow_fy_last_n_steps[-1]
+
         self.fy_error = self.fy - self.reference_lift
         self.fy_integrated_error = self.fy_integrated_error + self.fy_error * self.delta_t
         self._update_kin_state_attributes()
@@ -175,6 +177,8 @@ class ViscousFlowEnv(FlowEnv):
         # Create observation for next state
         observation = self._get_obs()
         info = super()._get_info()
+        info["unscaled flow fy"] = flow_fy_last_n_steps
+        info["flow t"] = flow_t_last_n_steps
 
         return observation, reward, terminated, truncated, info
 
