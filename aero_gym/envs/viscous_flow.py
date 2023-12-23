@@ -101,7 +101,9 @@ class ViscousFlowEnv(FlowEnv):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed, options=options)
-        os.system("vmstat")
+        
+        # Manually call garbage collector to avoid running out of memory due to undiscovered memory leak
+        self.jl.eval("GC.gc()")
 
         # Assign the options to the relevant fields
         if options is not None:
