@@ -7,7 +7,7 @@ my_params["grid Re"] = grid_Re
 my_params["freestream speed"] = U
 xlim = (xmin,xmax)
 ylim = (ymin,ymax)
-g = setup_grid(xlim, ylim, my_params)
+g = setup_grid(xlim, ylim, my_params; optimize=false)
 
 # setup airfoil
 ds = surface_point_spacing(g, my_params)
