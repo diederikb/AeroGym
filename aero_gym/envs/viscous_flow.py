@@ -22,7 +22,7 @@ class ViscousFlowEnv(FlowEnv):
                  xlim=[-0.75,2.0],
                  ylim=[-0.5,0.5],
                  Re=200,
-                 gridRe=4,
+                 grid_Re=4,
                  observe_vorticity_field=False,
                  normalize_vorticity=True,
                  vorticity_scale=1.0,
@@ -35,7 +35,7 @@ class ViscousFlowEnv(FlowEnv):
 
         # Create the Julia process and set up the viscous flow simulation
         self.jl = Julia()
-        self.jl.eval(f"Re={Re}; grid_Re={gridRe}; xmin={xlim[0]}; xmax={xlim[1]}; ymin={ylim[0]}; ymax={ylim[1]}; U={self.U}; c={self.c}; a={self.a}; alpha_init={self.alpha_init}; init_time={initialization_time}; t_max={self.t_max}")
+        self.jl.eval(f"Re={Re}; grid_Re={grid_Re}; xmin={xlim[0]}; xmax={xlim[1]}; ymin={ylim[0]}; ymax={ylim[1]}; U={self.U}; c={self.c}; a={self.a}; alpha_init={self.alpha_init}; init_time={initialization_time}; t_max={self.t_max}")
         julia_sys_setup_commands = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_sys_setup_commands.jl").read_text()
         self.jl.eval(julia_sys_setup_commands)
 
