@@ -32,9 +32,9 @@ def evaluate(env, filepath, alpha_ddot_prescribed=None):
             info["unscaled alpha"], 
             info["unscaled alpha_dot"], 
             info["unscaled h_ddot"])
+        obs, reward, terminated, truncated, info = env.step(action)
         writestr += ("{:11.3e} " * 4).format(info["unscaled previous alpha_ddot"], info["unscaled previous fy"], reward, episode_return)
         writefile.write(writestr + "\n")
-        obs, reward, terminated, truncated, info = env.step(action)
         episode_return += reward
         if "unscaled flow fy" in info.keys():
             for flow_step in range(len(info["flow t"])):

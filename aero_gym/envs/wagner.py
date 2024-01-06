@@ -126,8 +126,6 @@ class WagnerEnv(FlowEnv):
 
         # Assign action to alpha_ddot and compute d_alpha_ddot
         super()._assign_action(action)
-        # Update prescribed (or randomly-generated) values
-        super()._update_prescribed_values()
 
         # Compute the lift
         fy_circ = 0.5 * (self.U ** 2) * self.c * self.rho * (2 * np.pi * np.dot(self.theo_D, [self.kin_state[3]]) + np.dot(self.theo_C, self.wake_state))[0]
@@ -170,6 +168,9 @@ class WagnerEnv(FlowEnv):
 
         # Compute the reward
         reward = super()._compute_reward()
+
+        # Update prescribed (or randomly-generated) values
+        super()._update_prescribed_values()
 
         # Create observation for next state
         observation = self._get_obs(self.kin_state, previous_kin_state, self.wake_state, previous_wake_state)

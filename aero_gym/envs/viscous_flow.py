@@ -4,7 +4,6 @@ import numpy as np
 from julia import Julia
 import importlib.resources
 from pathlib import Path
-import os
 
 # TODO: need to fix the behavior when alpha_init is specified.
 
@@ -143,8 +142,6 @@ class ViscousFlowEnv(FlowEnv):
 
         # Assign action to alpha_ddot and compute d_alpha_ddot
         super()._assign_action(action)
-        # Update prescribed (or randomly-generated) values
-        super()._update_prescribed_values()
 
         # Step system. Note that we have to take care to take the correct timestep to avoid discontinuities in the solution (this is why we don't use stop_at_tdt)
         self.jl.eval(f"theta_ddot = -({self.alpha_ddot}); h_ddot = {self.h_ddot}; n_steps = {self.n_solver_steps_per_env_step}")
@@ -156,7 +153,7 @@ class ViscousFlowEnv(FlowEnv):
         self.fy_integrated_error = self.fy_integrated_error + self.fy_error * self.delta_t
         self._update_kin_state_attributes()
 
-		# Update the time and time step
+	# Update the time and time step
         self.t = self.jl.eval("integrator.t")
         self.time_step += 1
 
@@ -175,6 +172,9 @@ class ViscousFlowEnv(FlowEnv):
         
         # Compute the reward
         reward = super()._compute_reward()
+
+        # Update prescribed (or randomly-generated) values
+        super()._update_prescribed_values()
 
         # Create observation for next state
         observation = self._get_obs()

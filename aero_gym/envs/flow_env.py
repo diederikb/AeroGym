@@ -321,9 +321,9 @@ class FlowEnv(gym.Env):
         elif self.h_ddot_generator is not None:
             self.h_ddot_list = np.array(self.h_ddot_generator(self))
         else:
-            self.h_ddot_list = np.zeros(int(self.t_max / self.delta_t))
+            self.h_ddot_list = np.zeros(int(self.t_max / self.delta_t) + 1)
             print("No h_ddot provided, using zeros instead")
-        assert len(self.h_ddot_list) >= int(self.t_max / self.delta_t), "The prescribed vertical acceleration has not enough entries for the whole simulation (starting at t=0)"
+        assert len(self.h_ddot_list) >= int(self.t_max / self.delta_t) + 1, "The prescribed vertical acceleration has not enough entries for the whole simulation (starting at t=0)"
 
         # If there is no prescribed reference lift use the provided function to generate one. If no function was provided, set the reference lift to zero.
         if self.reference_lift_prescribed is not None:
@@ -331,9 +331,9 @@ class FlowEnv(gym.Env):
         elif self.reference_lift_generator is not None:
             self.reference_lift_list = np.array(self.reference_lift_generator(self))
         else:
-            self.reference_lift_list = np.zeros(int(self.t_max / self.delta_t))
+            self.reference_lift_list = np.zeros(int(self.t_max / self.delta_t) + 1)
             print("No reference lift provided, using zeros instead")
-        assert len(self.reference_lift_list) >= int(self.t_max / self.delta_t), "The prescribed reference lift has not enough entries for the whole simulation (starting at t=0)"
+        assert len(self.reference_lift_list) >= int(self.t_max / self.delta_t) + 1, "The prescribed reference lift has not enough entries for the whole simulation (starting at t=0)"
 
         self.h_ddot = self.h_ddot_list[self.time_step]
         self.reference_lift = self.reference_lift_list[self.time_step]
@@ -342,7 +342,6 @@ class FlowEnv(gym.Env):
         self.alpha_ddot = 0.0
         self.d_alpha_ddot = 0.0
         self.h_dot = 0.0
-        self.h_ddot = 0.0
         # The following should be set to their actual values in the child's reset function
         self.fy = 0.0
         self.fy_error = 0.0
@@ -399,9 +398,9 @@ class FlowEnv(gym.Env):
             if self.terminated:
                 reward -= 100
         elif self.reward_type == 5:
-            reward = -abs(self.fy_error / self.lift_scale) - 2 * abs(self.d_alpha_ddot / self.alpha_ddot_scale) + 1
+            reward = -abs(self.fy_error / self.lift_scale) + 1
             if self.terminated:
-                reward -= 1000
+                reward -= 100
         elif self.reward_type == 6:
             reward = -abs(self.fy_error / self.lift_scale) - 2 * abs(self.d_alpha_ddot / self.alpha_ddot_scale) + 1
             if abs(self.fy_error) < 0.1 * self.lift_scale:
