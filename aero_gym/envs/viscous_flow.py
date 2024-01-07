@@ -17,7 +17,7 @@ class ViscousFlowEnv(FlowEnv):
                  render_mode=None,
                  initialization_time=5.0,
                  initialization_file=None,
-                 sys_reinit_commands_file=None,
+                 sys_reinit_commands=None,
                  xlim=[-0.75,2.0],
                  ylim=[-0.5,0.5],
                  Re=200,
@@ -27,7 +27,7 @@ class ViscousFlowEnv(FlowEnv):
                  vorticity_scale=1.0,
                  **kwargs):
         super().__init__(**kwargs)
-        self.sys_reinit_commands_file = sys_reinit_commands_file
+        self.sys_reinit_commands_file = sys_reinit_commands
         self.vorticity_scale = vorticity_scale
         self.observe_vorticity_field = observe_vorticity_field
         self.normalize_vorticity = normalize_vorticity
