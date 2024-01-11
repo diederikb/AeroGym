@@ -2,19 +2,17 @@ using ViscousFlow
 
 # setup grid
 my_params = Dict()
-my_params["Re"] = {Re}
-my_params["grid Re"] = {grid_Re}
-xlim = ({xmin},{xmax})
-ylim = ({ymin},{ymax})
-g = setup_grid(xlim, ylim, my_params)
+my_params["Re"] = Re
+my_params["grid Re"] = grid_Re
+my_params["freestream speed"] = U
+xlim = (xmin,xmax)
+ylim = (ymin,ymax)
+g = setup_grid(xlim, ylim, my_params; optimize=false)
 
 # setup airfoil
-U = {U}
-c = {c}
-a = {a}
 ds = surface_point_spacing(g, my_params)
 body = Plate(1.0, ds)
-X = MotionTransform([0.0, 0.0], 0.0)
+X = MotionTransform([0.0, 0.0], -(alpha_init))
 transform_body!(body, X)
 
 parent_body, child_body = 0, 1
@@ -22,7 +20,7 @@ Xp = MotionTransform([0.0, 0.0], 0.0)
 Xc = MotionTransform([a, 0.0], 0.0)
 
 adof = ExogenousDOF()
-xdof = ConstantVelocityDOF(-U)
+xdof = ConstantVelocityDOF(0)
 ydof = ExogenousDOF()
 dofs = [adof, xdof, ydof]
 joint = Joint(FreeJoint2d, parent_body, Xp, child_body, Xc, dofs)

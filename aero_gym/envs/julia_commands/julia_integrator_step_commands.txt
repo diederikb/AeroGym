@@ -1,3 +1,0 @@
-update_exogenous!(integrator,[{alpha_ddot}, {h_ddot}])
-# Setting the third argument to true will stop at the correct delta_t's, but there will be discontinuities in the solution
-step!(integrator, {delta_t}, false)
