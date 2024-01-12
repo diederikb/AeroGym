@@ -10,6 +10,9 @@ from pathlib import Path
 class ViscousFlowEnv(FlowEnv):
     """
     The ViscousFlow environment is the two-dimensional, viscous, aerodynamic model for an airfoil undergoing arbitrary motions. The airfoil undergoes prescribed or random vertical accelerations and the goal is to minimize the lift variations by controlling the AOA through the angular acceleration of the airfoil.
+
+    ## Arguments
+    CFL: CFL number to compute timestep, only considering the constant freestream velocity U. The user needs to adjust for additional forcing in the system, which could increase the velocities beyond their stable limits.
     """
     metadata = {"render_modes": ["ansi", "grayscale_array", "grid"], "render_fps": 4}
 
@@ -22,6 +25,7 @@ class ViscousFlowEnv(FlowEnv):
                  ylim=[-0.5,0.5],
                  Re=200,
                  grid_Re=4,
+                 CFL=0.5,
                  observe_vorticity_field=False,
                  normalize_vorticity=True,
                  vorticity_scale=1.0,
@@ -34,7 +38,7 @@ class ViscousFlowEnv(FlowEnv):
 
         # Create the Julia process and set up the viscous flow simulation
         self.jl = Julia()
-        self.jl.eval(f"Re={Re}; grid_Re={grid_Re}; xmin={xlim[0]}; xmax={xlim[1]}; ymin={ylim[0]}; ymax={ylim[1]}; U={self.U}; c={self.c}; a={self.a}; alpha_init={self.alpha_init}; init_time={initialization_time}; t_max={self.t_max}")
+        self.jl.eval(f"Re={Re}; grid_Re={grid_Re}; CFL={CFL}; xmin={xlim[0]}; xmax={xlim[1]}; ymin={ylim[0]}; ymax={ylim[1]}; U={self.U}; c={self.c}; a={self.a}; alpha_init={self.alpha_init}; init_time={initialization_time}; t_max={self.t_max}")
         julia_sys_setup_commands = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_sys_setup_commands.jl").read_text()
         self.jl.eval(julia_sys_setup_commands)
 

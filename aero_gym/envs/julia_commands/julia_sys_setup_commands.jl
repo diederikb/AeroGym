@@ -4,6 +4,7 @@ using ViscousFlow
 my_params = Dict()
 my_params["Re"] = Re
 my_params["grid Re"] = grid_Re
+my_params["CFL"] = CFL
 my_params["freestream speed"] = U
 xlim = (xmin,xmax)
 ylim = (ymin,ymax)
