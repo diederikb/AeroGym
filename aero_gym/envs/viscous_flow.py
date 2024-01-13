@@ -127,7 +127,7 @@ class ViscousFlowEnv(FlowEnv):
         Main.eval(julia_integrator_reset_commands)
 
         _, _, self.fy = Main.eval("force(integrator, 1)")
-        self.fy_error = self.fy - self.reference_lift
+        self.fy_error = self.reference_lift - self.fy
 
         # Pressure is computed in _get_obs()
         self.p = np.zeros_like(self.pressure_sensor_positions)
@@ -152,7 +152,7 @@ class ViscousFlowEnv(FlowEnv):
         (flow_fy_last_n_steps, flow_t_last_n_steps) = Main.eval(julia_integrator_step_commands)
         self.fy = flow_fy_last_n_steps[-1]
 
-        self.fy_error = self.fy - self.reference_lift
+        self.fy_error = self.reference_lift - self.fy
         self.fy_integrated_error = self.fy_integrated_error + self.fy_error * self.delta_t
         self._update_kin_state_attributes()
 
