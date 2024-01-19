@@ -4,6 +4,7 @@ import numpy as np
 from julia import Main
 import importlib.resources
 from pathlib import Path
+import logging
 
 # TODO: need to fix the behavior when alpha_init is specified.
 
@@ -40,6 +41,7 @@ class ViscousFlowEnv(FlowEnv):
         Main.eval(f"Re={Re}; grid_Re={grid_Re}; CFL={CFL}; xmin={xlim[0]}; xmax={xlim[1]}; ymin={ylim[0]}; ymax={ylim[1]}; U={self.U}; c={self.c}; a={self.a}; alpha_init={self.alpha_init}; init_time={initialization_time}; t_max={self.t_max}")
         julia_sys_setup_commands = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_sys_setup_commands.jl").read_text()
         Main.eval(julia_sys_setup_commands)
+        self.x_body = Main.eval("collect(body)[1]")
 
         # Create a flow solution that will be used to initialize the episodes at every reset call. If a file is provided, use the data in there to initialize the flow field. If not, run the flow solver to create an solution
         if initialization_file is not None:
@@ -54,8 +56,8 @@ class ViscousFlowEnv(FlowEnv):
         # For now, make sure that the env delta_t is a multiple of delta_t_solver
         self.n_solver_steps_per_env_step = int(np.floor(self.delta_t / delta_t_solver))
         self.delta_t = self.n_solver_steps_per_env_step * delta_t_solver
-        print("Flow solver timestep: delta_t = " + str(delta_t_solver))
-        print("Setting environment timestep to multiple of flow solver timestep: delta_t = " + str(self.delta_t))
+        logging.info("Flow solver timestep: delta_t = " + str(delta_t_solver))
+        logging.info("Setting environment timestep to multiple of flow solver timestep: delta_t = " + str(self.delta_t))
         
         if self.observe_vorticity_field:
             nx, ny = Main.eval("size(zeros_gridcurl(sys))")
@@ -79,11 +81,6 @@ class ViscousFlowEnv(FlowEnv):
         return
 
     def _get_obs(self):
-        if self.observe_previous_pressure:
-            p_body = Main.eval("pressurejump(integrator).data")
-            x_body = Main.eval("collect(body)[1]")
-            self.p = np.interp(self.pressure_sensor_positions, x_body, p_body)
-
         scalar_obs = super()._get_obs() 
 
         if self.observe_vorticity_field:
@@ -104,6 +101,10 @@ class ViscousFlowEnv(FlowEnv):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed, options=options)
         
+        # Additional histories to be returned in info dict
+        self.solver_fy_hist = np.array([])
+        self.solver_t_hist = np.array([])
+
         # Manually call garbage collector to avoid running out of memory due to undiscovered memory leak
         Main.eval("GC.gc()")
 
@@ -129,8 +130,14 @@ class ViscousFlowEnv(FlowEnv):
         _, _, self.fy = Main.eval("force(integrator, 1)")
         self.fy_error = self.reference_lift - self.fy
 
-        # Pressure is computed in _get_obs()
+        # Set pressure to previous value
         self.p = np.zeros_like(self.pressure_sensor_positions)
+
+        # Not ideal that this sets the pressure to the latest available value, because this is not the behavior in step().
+        # However, this is not an issue for alpha_init = 0, because the pressure jump will be zero
+        if self.observe_previous_pressure:
+            p_body = Main.eval("pressurejump(integrator).data")
+            self.p = np.interp(self.pressure_sensor_positions, self.x_body, p_body)
 
         observation = self._get_obs()
         info = super()._get_info()
@@ -146,20 +153,6 @@ class ViscousFlowEnv(FlowEnv):
         # Assign action to alpha_ddot and compute d_alpha_ddot
         super()._assign_action(action)
 
-        # Step system. Note that we have to take care to take the correct timestep to avoid discontinuities in the solution (this is why we don't use stop_at_tdt)
-        Main.eval(f"theta_ddot = -({self.alpha_ddot}); h_ddot = {self.h_ddot}; n_steps = {self.n_solver_steps_per_env_step}")
-        julia_integrator_step_commands = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_integrator_step_commands.jl").read_text()
-        (flow_fy_last_n_steps, flow_t_last_n_steps) = Main.eval(julia_integrator_step_commands)
-        self.fy = flow_fy_last_n_steps[-1]
-
-        self.fy_error = self.reference_lift - self.fy
-        self.fy_integrated_error = self.fy_integrated_error + self.fy_error * self.delta_t
-        self._update_kin_state_attributes()
-
-	# Update the time and time step
-        self.t = Main.eval("integrator.t")
-        self.time_step += 1
-
         # For debugging:
         if abs(self.fy) > 1e2:
             print("t = {t}".format(t = self.t))
@@ -169,6 +162,37 @@ class ViscousFlowEnv(FlowEnv):
             print("alpha_ddot = {alpha_ddot}".format(alpha_ddot = self.alpha_ddot))
             print("alpha_dot = {alpha_dot}".format(alpha_dot = self.alpha_dot))
             print("alpha = {alpha}".format(alpha = self.alpha))
+
+        # Transfer alpha_ddot and h_ddot to Julia and step integrator for n_solver_steps_per_env_step
+        Main.eval(f"update_exogenous!(integrator,[-({self.alpha_ddot}), {self.h_ddot}])")
+        for step in range(self.n_solver_steps_per_env_step):
+            Main.eval("step!(integrator)")
+            (_, _, fy) = Main.eval("force(integrator, 1)")
+            t = Main.eval("integrator.t")
+            # Save the fy and t values from every solver timestep
+            self.solver_fy_hist = np.append(self.solver_fy_hist, fy)
+            self.solver_t_hist = np.append(self.solver_t_hist, t)
+            if step == self.n_solver_steps_per_env_step - 1:
+                # Set lift and pressure to the latest computed value with the latest alpha_ddot and h_ddot.
+                # Ideally, we set the lift and pressure to first computed value with the latest alpha_ddot and h_ddot. This matches the behavior of the wagner env the closest.
+                self.fy = fy
+                if self.observe_previous_pressure:
+                    p_body = Main.eval("pressurejump(integrator).data")
+                    self.p = np.interp(self.pressure_sensor_positions, self.x_body, p_body)
+
+        # Compute lift errors with reference
+        self.fy_error = self.reference_lift - self.fy
+        self.fy_integrated_error = self.fy_integrated_error + self.fy_error * self.delta_t
+
+        # Update histories
+        super()._update_hist()
+
+	# Update the time and time step
+        self.t = Main.eval("integrator.t")
+        self.time_step += 1
+
+        # Update kin states to latest available values
+        self._update_kin_state_attributes()
 
         # Check if termination or truncation condiations are met
         terminated, truncated = super()._check_termination_truncation()
@@ -182,8 +206,8 @@ class ViscousFlowEnv(FlowEnv):
         # Create observation for next state
         observation = self._get_obs()
         info = super()._get_info()
-        info["unscaled flow fy"] = flow_fy_last_n_steps
-        info["flow t"] = flow_t_last_n_steps
+        info["solver_fy_hist"] = self.solver_fy_hist
+        info["solver_t_hist"] = self.solver_t_hist
 
         return observation, reward, terminated, truncated, info
 

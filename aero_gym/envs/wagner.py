@@ -151,6 +151,9 @@ class WagnerEnv(FlowEnv):
         previous_kin_state = np.copy(self.kin_state)
         previous_wake_state = np.copy(self.wake_state)
 
+        # Update histories
+        super()._update_hist()
+
         # Update the time and time step
         self.t += self.delta_t
         self.time_step += 1
