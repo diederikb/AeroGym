@@ -113,7 +113,7 @@ class WagnerEnv(FlowEnv):
         self.wake_state = np.zeros(self.N_wake_states)
 
         self.fy = np.pi * self.alpha_init * (self.U ** 2) * self.c * self.rho
-        self.fy_error = self.fy - self.reference_lift
+        self.fy_error = self.reference_lift - self.fy
         self.p = [- 2 * self.fy / (np.pi * self.c) * np.sqrt((0.5 * self.c + xp) / (0.5 * self.c - xp)) for xp in self.pressure_sensor_positions]
 
         observation = self._get_obs(self.kin_state, self.kin_state, self.wake_state, self.wake_state)
@@ -131,7 +131,7 @@ class WagnerEnv(FlowEnv):
         fy_circ = 0.5 * (self.U ** 2) * self.c * self.rho * (2 * np.pi * np.dot(self.theo_D, [self.kin_state[3]]) + np.dot(self.theo_C, self.wake_state))[0]
         fy_am = 0.25 * self.rho * self.c ** 2 * np.pi * (-self.h_ddot - self.a * self.alpha_ddot + self.U * self.kin_state[2])
         self.fy = fy_circ + fy_am
-        self.fy_error = self.fy - self.reference_lift
+        self.fy_error = self.reference_lift - self.fy
         self.fy_integrated_error = self.fy_integrated_error + self.fy_error * self.delta_t
 
         # Compute the pressure using the circulatory lift
@@ -150,6 +150,9 @@ class WagnerEnv(FlowEnv):
         # Save the state before updating the new current state
         previous_kin_state = np.copy(self.kin_state)
         previous_wake_state = np.copy(self.wake_state)
+
+        # Update histories
+        super()._update_hist()
 
         # Update the time and time step
         self.t += self.delta_t

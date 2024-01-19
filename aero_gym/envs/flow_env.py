@@ -3,6 +3,7 @@ from gymnasium import spaces
 import numpy as np
 from io import StringIO
 from contextlib import closing
+import logging
 
 # TODO: reverse error definition
 
@@ -23,14 +24,19 @@ class FlowEnv(gym.Env):
 
     The observation space depends on the subclass implementation. This superclass constructor and _get_obs() methods can create an observation space and vector, which the subclass can further modify. Each element of the observation vector is scaled by its corresponding scaling, which can be passed to the constructor. For example, the angular velocity `alpha_dot` is scaled by `alpha_dot_scaled`. This allows the user to normalize the observations to improve the neural network training.
 
-    The default observation space is an `ndarray` with shape `(2,)` where the elements correspond to the following:
+    The observation space is an `ndarray`. Setting the following keyword arguments to `True` will append the observation space with the following arrays (in the order that is given here):
+
+    `observe_alpha` (True by default)
 
     | Index | Observation                                                                 | Min    | Max    |
     |-------|-----------------------------------------------------------------------------|--------|--------|
-    |   0   | angle of attack at the current timestep                                     | -Inf   |  Inf   |
-    |   1   | angular velocity of the wing at the current timestep                        | -Inf   |  Inf   |
+    |   0   | latest available angle of attack at the current timestep                    | -Inf   |  Inf   |
 
-    Setting the following keyword arguments to `True` will append the observation space with the following arrays (in the order that is given here):
+    `observe_alpha_dot` (True by default)
+
+    | Index | Observation                                                                 | Min    | Max    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|
+    |   0   | latest available angular velocity of the wing at the current timestep       | -Inf   |  Inf   |
 
     `observe_h_ddot`
 
@@ -178,7 +184,7 @@ class FlowEnv(gym.Env):
 
         # Set upper and lower lift limits to lift scale if they were not provided
         if lift_upper_limit is None or lift_lower_limit is None:
-            print("`lift_upper_limit` and/or `lift_lower_limit` not provided, setting limits to plus and minus `lift_scale`")
+            logging.info("`lift_upper_limit` and/or `lift_lower_limit` not provided, setting limits to plus and minus `lift_scale`")
             self.lift_upper_limit = self.lift_scale
             self.lift_lower_limit = -self.lift_scale
         else:
@@ -235,6 +241,16 @@ class FlowEnv(gym.Env):
         # Overload in child environment
         return
 
+    def _update_hist(self):
+        self.t_hist = np.append(self.t_hist, self.t)
+        self.h_dot_hist = np.append(self.h_dot_hist, self.h_dot)
+        self.h_ddot_hist = np.append(self.h_ddot_hist, self.h_ddot)
+        self.alpha_hist = np.append(self.alpha_hist, self.alpha)
+        self.alpha_dot_hist = np.append(self.alpha_dot_hist, self.alpha_dot)
+        self.alpha_ddot_hist = np.append(self.alpha_ddot_hist, self.alpha_ddot)
+        self.fy_hist = np.append(self.fy_hist, self.fy)
+        self.reference_lift_hist = np.append(self.reference_lift_hist, self.reference_lift)
+
     def _get_obs(self):
         self._update_kin_state_attributes()
         scalar_obs = np.array([])
@@ -264,26 +280,18 @@ class FlowEnv(gym.Env):
 
     def _get_info(self):
         self._update_kin_state_attributes()
-        return {"scaled previous fy": self.fy / self.lift_scale,
-                "scaled previous fy_error": self.fy_error / self.lift_scale,
-                "scaled previous fy_integrated_error": self.fy_integrated_error / self.lift_scale,
-                "scaled previous alpha_ddot": self.alpha_ddot / self.alpha_ddot_scale,
-                "scaled alpha_dot": self.alpha_dot / self.alpha_dot_scale,
-                "scaled alpha": self.alpha / self.alpha_scale,
-                "scaled h_ddot": self.h_ddot / self.h_ddot_scale,
-                "scaled h_dot": self.h_dot / self.h_dot_scale,
-                "scaled reference_lift": self.reference_lift / self.lift_scale,
-                "unscaled previous fy": self.fy,
-                "unscaled previous fy_error": self.fy_error,
-                "unscaled previous fy_integrated_error": self.fy_integrated_error,
-                "unscaled previous alpha_ddot": self.alpha_ddot,
-                "unscaled alpha_dot": self.alpha_dot,
-                "unscaled alpha": self.alpha,
-                "unscaled h_ddot": self.h_ddot,
-                "unscaled h_dot": self.h_dot,
-                "unscaled reference_lift": self.reference_lift / self.lift_scale,
-                "t": self.t,
-                "time_step": self.time_step}
+        return {
+            "t_hist": self.t_hist,
+            "h_dot_hist": self.h_dot_hist,
+            "h_ddot_hist": self.h_ddot_hist,
+            "alpha_hist": self.alpha_hist,
+            "alpha_dot_hist": self.alpha_dot_hist,
+            "alpha_ddot_hist": self.alpha_ddot_hist,
+            "fy_hist": self.fy_hist,
+            "reference_lift_hist": self.reference_lift_hist,
+            "t": self.t,
+            "time_step": self.time_step
+        }
 
     def reset(self, seed=None, options=None):
         # We need the following line to seed self.np_random
@@ -294,6 +302,16 @@ class FlowEnv(gym.Env):
         self.time_step = 0
         self.truncated = False
         self.terminated = False
+
+        # Histories to be returned in info dict
+        self.t_hist = np.array([])
+        self.h_dot_hist = np.array([])
+        self.h_ddot_hist = np.array([])
+        self.alpha_hist = np.array([])
+        self.alpha_dot_hist = np.array([])
+        self.alpha_ddot_hist = np.array([])
+        self.fy_hist = np.array([])
+        self.reference_lift_hist = np.array([])
 
         # Assign the options to the relevant fields
         # This can be changed to looping over the option keys and trying them as attributes of self
@@ -322,7 +340,7 @@ class FlowEnv(gym.Env):
             self.h_ddot_list = np.array(self.h_ddot_generator(self))
         else:
             self.h_ddot_list = np.zeros(int(self.t_max / self.delta_t) + 1)
-            print("No h_ddot provided, using zeros instead")
+            logging.info("No h_ddot provided, using zeros instead")
         assert len(self.h_ddot_list) >= int(self.t_max / self.delta_t) + 1, "The prescribed vertical acceleration has not enough entries for the whole simulation (starting at t=0)"
 
         # If there is no prescribed reference lift use the provided function to generate one. If no function was provided, set the reference lift to zero.
@@ -332,7 +350,7 @@ class FlowEnv(gym.Env):
             self.reference_lift_list = np.array(self.reference_lift_generator(self))
         else:
             self.reference_lift_list = np.zeros(int(self.t_max / self.delta_t) + 1)
-            print("No reference lift provided, using zeros instead")
+            logging.info("No reference lift provided, using zeros instead")
         assert len(self.reference_lift_list) >= int(self.t_max / self.delta_t) + 1, "The prescribed reference lift has not enough entries for the whole simulation (starting at t=0)"
 
         self.h_ddot = self.h_ddot_list[self.time_step]
