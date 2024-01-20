@@ -26,7 +26,7 @@ def evaluate(env, alpha_ddot_prescribed=None):
     return obs, info, render_list
 
 """
-Plot the environment states and statistics in `filename`, generated with `evaluate`.
+Plot the environment states and statistics in `info_dict`, generated with `evaluate`.
 """
 def plotfile(info_dict, axarr=None, label=None):
     if axarr is None:

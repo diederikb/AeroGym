@@ -74,7 +74,7 @@ class FlowEnv(gym.Env):
 
     ## Rewards
 
-    The reward function can be specified by setting the `reward_function` keyword to the corresponding number of the desired function. Check the implementation of `_compute_reward()` for available options.
+    The reward function can be specified by setting the `reward_type` keyword to the corresponding number of the desired function. Check the implementation of `_compute_reward()` for available options.
 
     ## Starting State
 
