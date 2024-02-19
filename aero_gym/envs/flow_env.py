@@ -38,6 +38,12 @@ class FlowEnv(gym.Env):
     |-------|-----------------------------------------------------------------------------|--------|--------|
     |   0   | latest available angular velocity of the wing at the current timestep       | -Inf   |  Inf   |
 
+    `observe_alpha_ddot`
+
+    | Index | Observation                                                                 | Min    | Max    |
+    |-------|-----------------------------------------------------------------------------|--------|--------|
+    |   0   | the previous angular acceleration of the wing                               | -Inf   |  Inf   |
+
     `observe_h_ddot`
 
     | Index | Observation                                                                 | Min    | Max    |
@@ -113,6 +119,7 @@ class FlowEnv(gym.Env):
                  reward_type=3,
                  observe_alpha=True,
                  observe_alpha_dot=True,
+                 observe_alpha_ddot=False,
                  observe_h_ddot=False,
                  observe_h_dot=False,
                  observe_previous_lift=False,
@@ -174,6 +181,7 @@ class FlowEnv(gym.Env):
 
         self.observe_alpha = observe_alpha
         self.observe_alpha_dot = observe_alpha_dot
+        self.observe_alpha_ddot = observe_alpha_ddot
         self.observe_h_ddot = observe_h_ddot
         self.observe_h_dot = observe_h_dot
         self.observe_previous_lift = observe_previous_lift
@@ -209,6 +217,9 @@ class FlowEnv(gym.Env):
             obs_low = np.append(obs_low, -np.inf)
             obs_high = np.append(obs_high, np.inf)
         if self.observe_alpha_dot:
+            obs_low = np.append(obs_low, -np.inf)
+            obs_high = np.append(obs_high, np.inf)
+        if self.observe_alpha_ddot:
             obs_low = np.append(obs_low, -np.inf)
             obs_high = np.append(obs_high, np.inf)
         if self.observe_h_ddot:
@@ -260,6 +271,8 @@ class FlowEnv(gym.Env):
             scalar_obs = np.append(scalar_obs, self.alpha / self.alpha_scale)
         if self.observe_alpha_dot:
             scalar_obs = np.append(scalar_obs, self.alpha_dot / self.alpha_dot_scale)
+        if self.observe_alpha_ddot:
+            scalar_obs = np.append(scalar_obs, self.alpha_ddot / self.alpha_ddot_scale)
         if self.observe_h_ddot:
             scalar_obs = np.append(scalar_obs, self.h_ddot / self.h_ddot_scale)
         if self.observe_h_dot:
