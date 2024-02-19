@@ -101,10 +101,6 @@ class ViscousFlowEnv(FlowEnv):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed, options=options)
         
-        # Additional histories to be returned in info dict
-        self.solver_fy_hist = np.array([])
-        self.solver_t_hist = np.array([])
-
         # Manually call garbage collector to avoid running out of memory due to undiscovered memory leak
         Main.eval("GC.gc()")
 
@@ -167,14 +163,10 @@ class ViscousFlowEnv(FlowEnv):
         Main.eval(f"update_exogenous!(integrator,[-({self.alpha_ddot}), {self.h_ddot}])")
         for step in range(self.n_solver_steps_per_env_step):
             Main.eval("step!(integrator)")
-            (_, _, fy) = Main.eval("force(integrator, 1)")
-            t = Main.eval("integrator.t")
-            # Save the fy and t values from every solver timestep
-            self.solver_fy_hist = np.append(self.solver_fy_hist, fy)
-            self.solver_t_hist = np.append(self.solver_t_hist, t)
             if step == self.n_solver_steps_per_env_step - 1:
                 # Set lift and pressure to the latest computed value with the latest alpha_ddot and h_ddot.
                 # Ideally, we set the lift and pressure to first computed value with the latest alpha_ddot and h_ddot. This matches the behavior of the wagner env the closest.
+                (mom, _, fy) = Main.eval("force(integrator, 1)")
                 self.fy = fy
                 if self.observe_previous_pressure:
                     p_body = Main.eval("pressurejump(integrator).data")
@@ -206,8 +198,19 @@ class ViscousFlowEnv(FlowEnv):
         # Create observation for next state
         observation = self._get_obs()
         info = super()._get_info()
-        info["solver_fy_hist"] = self.solver_fy_hist
-        info["solver_t_hist"] = self.solver_t_hist
+
+        if terminated or truncated:
+            (solver_mom_hist, _, solver_fy_hist) = Main.eval("force(integrator.sol, sys, 1)")
+            solver_alpha_hist = Main.eval("map(u -> -exogenous_position_vector(aux_state(u), m, 1)[1], integrator.sol)")
+            solver_alpha_dot_hist = Main.eval("map(u -> -exogenous_velocity_vector(aux_state(u), m, 1)[1], integrator.sol)")
+            solver_h_dot_hist = Main.eval("map(u -> exogenous_velocity_vector(aux_state(u), m, 1)[2], integrator.sol)")
+            solver_t_hist = Main.eval("integrator.sol.t")
+            info["solver_fy_hist"] = solver_fy_hist
+            info["solver_power_hist"] = solver_mom_hist * solver_alpha_dot_hist
+            info["solver_alpha_hist"] = solver_alpha_hist
+            info["solver_alpha_dot_hist"] = solver_alpha_dot_hist
+            info["solver_h_dot_hist"] = solver_h_dot_hist
+            info["solver_t_hist"] = solver_t_hist - self.delta_t
 
         return observation, reward, terminated, truncated, info
 
