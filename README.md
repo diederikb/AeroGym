@@ -35,4 +35,4 @@ To use AeroGym in your Python projects, you can import it like any other Python 
 ```python
 import AeroGym
 ```
-Please refer to the [Jupyter notebooks](aero_gym/notebooks) for detailed usage instructions and examples. If you want to run the notebooks, you will have to install [Jupyter](https://jupyter.org/install) and install a kernel for your virtual environment if you're using one (by running `ipython kernel install --user --name=NAME_OF_YOUR_ENVIRONMENT` after activating your environment). Make sure to change the notebook kernel to your 
+Please refer to the [Jupyter notebooks](aero_gym/notebooks) for detailed usage instructions and examples. If you want to run the notebooks, you will have to install [Jupyter](https://jupyter.org/install) and install a kernel for your virtual environment if you're using one (by running `ipython kernel install --user --name=NAME_OF_YOUR_ENVIRONMENT` after activating your environment). Make sure to change the notebook kernel to the one that contains AeroGym.
