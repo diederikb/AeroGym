@@ -8,6 +8,7 @@ setup(
         "gymnasium>=0.28",
         "numpy",
         "juliacall",
-        "scipy"
+        "scipy",
+        "matplotlib"
     ],
 )
