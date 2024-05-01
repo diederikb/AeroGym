@@ -6,7 +6,8 @@ setup(
     author="Diederik Beckers",
     install_requires=[
         "gymnasium>=0.28",
-        "scipy",
-        "julia"
+        "numpy",
+        "juliacall",
+        "scipy"
     ],
 )

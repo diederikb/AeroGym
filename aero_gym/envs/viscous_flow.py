@@ -1,7 +1,7 @@
 from aero_gym.envs.flow_env import FlowEnv
 from gymnasium import spaces
 import numpy as np
-from julia import Main
+from juliacall import Main
 import importlib.resources
 from pathlib import Path
 import logging
@@ -38,10 +38,10 @@ class ViscousFlowEnv(FlowEnv):
         self.normalize_vorticity = normalize_vorticity
 
         # Create the Julia process and set up the viscous flow simulation
-        Main.eval(f"Re={Re}; grid_Re={grid_Re}; CFL={CFL}; xmin={xlim[0]}; xmax={xlim[1]}; ymin={ylim[0]}; ymax={ylim[1]}; U={self.U}; c={self.c}; a={self.a}; alpha_init={self.alpha_init}; init_time={initialization_time}; t_max={self.t_max}")
+        Main.seval(f"Re={Re}; grid_Re={grid_Re}; CFL={CFL}; xmin={xlim[0]}; xmax={xlim[1]}; ymin={ylim[0]}; ymax={ylim[1]}; U={self.U}; c={self.c}; a={self.a}; alpha_init={self.alpha_init}; init_time={initialization_time}; t_max={self.t_max}")
         julia_sys_setup_commands = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_sys_setup_commands.jl").read_text()
-        Main.eval(julia_sys_setup_commands)
-        self.x_body = Main.eval("collect(body)[1]")
+        Main.seval(julia_sys_setup_commands)
+        self.x_body = Main.seval("collect(body)[1]")
 
         # Create a flow solution that will be used to initialize the episodes at every reset call. If a file is provided, use the data in there to initialize the flow field. If not, run the flow solver to create an solution
         if initialization_file is not None:
@@ -49,10 +49,10 @@ class ViscousFlowEnv(FlowEnv):
             raise NotImplementedError
         else:
             julia_sys_initialization_commands = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_sys_initialization_with_solver_commands.jl").read_text()
-            Main.eval(julia_sys_initialization_commands)
+            Main.seval(julia_sys_initialization_commands)
 
         # Get the timestep from julia
-        delta_t_solver = Main.eval("sys.timestep_func(u0, sys)")
+        delta_t_solver = Main.seval("sys.timestep_func(u0, sys)")
         # For now, make sure that the env delta_t is a multiple of delta_t_solver
         self.n_solver_steps_per_env_step = int(np.floor(self.delta_t / delta_t_solver))
         self.delta_t = self.n_solver_steps_per_env_step * delta_t_solver
@@ -60,7 +60,7 @@ class ViscousFlowEnv(FlowEnv):
         logging.info("Setting environment timestep to multiple of flow solver timestep: delta_t = " + str(self.delta_t))
         
         if self.observe_vorticity_field:
-            nx, ny = Main.eval("size(zeros_gridcurl(sys))")
+            nx, ny = Main.seval("size(zeros_gridcurl(sys))")
             if self.normalize_vorticity: # treat field as a grayscale image
                 vorticity_observation_space = spaces.Box(0, 255, shape=(ny, nx, 1), dtype=np.uint8)
             else:
@@ -73,8 +73,8 @@ class ViscousFlowEnv(FlowEnv):
         self.render_mode = render_mode
 
     def _update_kin_state_attributes(self):
-        pos = Main.eval("exogenous_position_vector(aux_state(integrator.u),m,1)")
-        vel = Main.eval("exogenous_velocity_vector(aux_state(integrator.u),m,1)")
+        pos = Main.seval("exogenous_position_vector(aux_state(integrator.u),m,1)")
+        vel = Main.seval("exogenous_velocity_vector(aux_state(integrator.u),m,1)")
         self.alpha = -pos[0]
         self.alpha_dot = -vel[0]
         self.h_dot = vel[1]
@@ -84,7 +84,7 @@ class ViscousFlowEnv(FlowEnv):
         scalar_obs = super()._get_obs() 
 
         if self.observe_vorticity_field:
-            vorticity_field = np.flip(np.transpose(Main.eval("vorticity(integrator).data")),axis=0)
+            vorticity_field = np.flip(np.transpose(Main.seval("vorticity(integrator).data")),axis=0)
             if self.normalize_vorticity:
                 # quick and dirty mapping from signed float to unsigned int
                 vorticity_obs = np.round(np.clip(vorticity_field / (2 * self.vorticity_scale) + 0.5, 0, 1) * 255).astype(np.uint8)
@@ -102,7 +102,7 @@ class ViscousFlowEnv(FlowEnv):
         super().reset(seed=seed, options=options)
         
         # Manually call garbage collector to avoid running out of memory due to undiscovered memory leak
-        Main.eval("GC.gc()")
+        Main.seval("GC.gc()")
 
         # Assign the options to the relevant fields
         if options is not None:
@@ -114,16 +114,16 @@ class ViscousFlowEnv(FlowEnv):
         # If there is a file with system reinitialization commands supplied, run them (e.g. to apply forcing)
         if self.sys_reinit_commands_file is not None:
             julia_sys_reinit_commands = Path(self.sys_reinit_commands_file).read_text()
-            Main.eval(julia_sys_reinit_commands)
+            Main.seval(julia_sys_reinit_commands)
             # Recompute n_solver_steps_per_env_step in case the time step changed in the new system
-            delta_t_solver = Main.eval("sys.timestep_func(u0, sys)")
+            delta_t_solver = Main.seval("sys.timestep_func(u0, sys)")
             self.n_solver_steps_per_env_step = int(np.floor(self.delta_t / delta_t_solver))
 
         # Set up the integrator in Julia
         julia_integrator_reset_commands = importlib.resources.files("aero_gym").joinpath("envs/julia_commands/julia_integrator_reset_commands.jl").read_text()
-        Main.eval(julia_integrator_reset_commands)
+        Main.seval(julia_integrator_reset_commands)
 
-        _, _, self.fy = Main.eval("force(integrator, 1)")
+        _, _, self.fy = Main.seval("force(integrator, 1)")
         self.fy_error = self.reference_lift - self.fy
 
         # Set pressure to previous value
@@ -132,7 +132,7 @@ class ViscousFlowEnv(FlowEnv):
         # Not ideal that this sets the pressure to the latest available value, because this is not the behavior in step().
         # However, this is not an issue for alpha_init = 0, because the pressure jump will be zero
         if self.observe_previous_pressure:
-            p_body = Main.eval("pressurejump(integrator).data")
+            p_body = Main.seval("pressurejump(integrator).data")
             self.p = np.interp(self.pressure_sensor_positions, self.x_body, p_body)
 
         observation = self._get_obs()
@@ -160,16 +160,16 @@ class ViscousFlowEnv(FlowEnv):
             print("alpha = {alpha}".format(alpha = self.alpha))
 
         # Transfer alpha_ddot and h_ddot to Julia and step integrator for n_solver_steps_per_env_step
-        Main.eval(f"update_exogenous!(integrator,[-({self.alpha_ddot}), {self.h_ddot}])")
+        Main.seval(f"update_exogenous!(integrator,[-({self.alpha_ddot}), {self.h_ddot}])")
         for step in range(self.n_solver_steps_per_env_step):
-            Main.eval("step!(integrator)")
+            Main.seval("step!(integrator)")
             if step == self.n_solver_steps_per_env_step - 1:
                 # Set lift and pressure to the latest computed value with the latest alpha_ddot and h_ddot.
                 # Ideally, we set the lift and pressure to first computed value with the latest alpha_ddot and h_ddot. This matches the behavior of the wagner env the closest.
-                (mom, _, fy) = Main.eval("force(integrator, 1)")
+                (mom, _, fy) = Main.seval("force(integrator, 1)")
                 self.fy = fy
                 if self.observe_previous_pressure:
-                    p_body = Main.eval("pressurejump(integrator).data")
+                    p_body = Main.seval("pressurejump(integrator).data")
                     self.p = np.interp(self.pressure_sensor_positions, self.x_body, p_body)
 
         # Compute lift errors with reference
@@ -180,7 +180,7 @@ class ViscousFlowEnv(FlowEnv):
         super()._update_hist()
 
 	# Update the time and time step
-        self.t = Main.eval("integrator.t")
+        self.t = Main.seval("integrator.t")
         self.time_step += 1
 
         # Update kin states to latest available values
@@ -200,17 +200,21 @@ class ViscousFlowEnv(FlowEnv):
         info = super()._get_info()
 
         if terminated or truncated:
-            (solver_mom_hist, _, solver_fy_hist) = Main.eval("force(integrator.sol, sys, 1)")
-            solver_alpha_hist = Main.eval("map(u -> -exogenous_position_vector(aux_state(u), m, 1)[1], integrator.sol)")
-            solver_alpha_dot_hist = Main.eval("map(u -> -exogenous_velocity_vector(aux_state(u), m, 1)[1], integrator.sol)")
-            solver_h_dot_hist = Main.eval("map(u -> exogenous_velocity_vector(aux_state(u), m, 1)[2], integrator.sol)")
-            solver_t_hist = Main.eval("integrator.sol.t")
+            (solver_mom_hist, _, solver_fy_hist) = Main.seval("force(integrator.sol, sys, 1)")
+            solver_mom_hist = np.array(solver_mom_hist)
+            solver_fy_hist = np.array(solver_fy_hist)
+            solver_alpha_hist = np.array(Main.seval("map(u -> -exogenous_position_vector(aux_state(u), m, 1)[1], integrator.sol)"))
+            solver_alpha_dot_hist = np.array(Main.seval("map(u -> -exogenous_velocity_vector(aux_state(u), m, 1)[1], integrator.sol)"))
+            solver_h_dot_hist = np.array(Main.seval("map(u -> exogenous_velocity_vector(aux_state(u), m, 1)[2], integrator.sol)"))
+            solver_t_hist = np.array(Main.seval("integrator.sol.t"))
+            solver_vort_hist = np.array(Main.seval("map(u -> u.data, vorticity(integrator.sol, sys, integrator.sol.t))"))
             info["solver_fy_hist"] = solver_fy_hist
             info["solver_power_hist"] = solver_mom_hist * solver_alpha_dot_hist
             info["solver_alpha_hist"] = solver_alpha_hist
             info["solver_alpha_dot_hist"] = solver_alpha_dot_hist
             info["solver_h_dot_hist"] = solver_h_dot_hist
             info["solver_t_hist"] = solver_t_hist - self.delta_t
+            info["solver_vort_hist"] = solver_vort_hist
 
         return observation, reward, terminated, truncated, info
 
@@ -223,7 +227,7 @@ class ViscousFlowEnv(FlowEnv):
             return self._render_frame_grid()
 
     def _render_frame_grayscale_array(self):
-        vorticity_field = np.flip(np.transpose(Main.eval("vorticity(integrator).data")),axis=0)
+        vorticity_field = np.flip(np.transpose(Main.seval("vorticity(integrator).data")),axis=0)
         # quick and dirty mapping from signed float to unsigned int
         vorticity_field = np.round(np.clip(vorticity_field / (2 * self.vorticity_scale) + 0.5, 0, 1) * 255).astype(np.uint8)
         # add extra dim that indicates the image as a single channel (check if this adds extra memory and if it should be made more efficient)
@@ -231,5 +235,5 @@ class ViscousFlowEnv(FlowEnv):
         return vorticity_field
 
     def _render_frame_grid(self):
-        vorticity_field = np.transpose(Main.eval("vorticity(integrator).data"))
+        vorticity_field = np.transpose(Main.seval("vorticity(integrator).data"))
         return vorticity_field
